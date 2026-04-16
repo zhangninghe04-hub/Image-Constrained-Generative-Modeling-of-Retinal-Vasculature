@@ -1,14 +1,17 @@
 """
 Generative branching model for retinal vascular networks.
 
-This module provides the core tree generation logic, refactored from the
-baseline notebook (notebooks/01_baseline_branching_model.ipynb) into
-reusable classes. The model generates synthetic vascular trees using
-recursive branching rules with configurable parameters and constraints.
+This module provides the core tree generation logic. The model generates
+synthetic vascular trees using recursive branching rules with configurable
+parameters and constraints derived from retinal images.
+
+Two generator classes are provided:
+- RetinalTreeGenerator: baseline model with geometric constraints only
+- ConstrainedTreeGenerator: extends baseline with density-aware branching
 """
 
 import numpy as np
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 
 
@@ -34,7 +37,8 @@ class TreeGeneratorConfig:
     """Configuration for the retinal tree generator.
 
     Parameters control the geometry and constraints of the generated
-    vascular network.
+    vascular network. Can be populated manually or from image-derived
+    constraints via `from_constraints()`.
     """
     retina_radius: float = 1.0
     root: Tuple[float, float] = (0.18, 0.0)
@@ -55,8 +59,68 @@ class TreeGeneratorConfig:
     macula_center: Tuple[float, float] = (-0.25, 0.0)
     macula_radius: float = 0.16
 
+    # Density-aware branching (optional)
+    density_map: Optional[np.ndarray] = None
+    density_weight: float = 0.5  # How much density influences max_depth
+
     random_seed: Optional[int] = 42
 
+    @classmethod
+    def from_constraints(
+        cls,
+        constraints: dict,
+        alpha: float = 0.72,
+        max_depth: int = 6,
+        branch_angle_mean_deg: float = 28,
+        branch_angle_std_deg: float = 7,
+        initial_length: float = 0.23,
+        density_weight: float = 0.5,
+        random_seed: Optional[int] = 42,
+    ) -> "TreeGeneratorConfig":
+        """
+        Create a config from image-derived constraints.
+
+        Parameters
+        ----------
+        constraints : dict
+            Output of extract_all_constraints(). Must contain a
+            'normalized' key with sub-keys: root, macula_center,
+            macula_radius, base_angle_up, base_angle_down.
+        alpha, max_depth, branch_angle_mean_deg, etc.
+            Branching parameters (not image-derived).
+        density_weight : float
+            Weight for density-guided depth adjustment (0 = ignore density).
+        random_seed : int, optional
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        TreeGeneratorConfig
+        """
+        norm = constraints['normalized']
+        density_map = constraints.get('vessel_density_map', None)
+
+        return cls(
+            retina_radius=1.0,
+            root=norm['root'],
+            initial_length=initial_length,
+            alpha=alpha,
+            max_depth=max_depth,
+            base_angle_up=norm['base_angle_up'],
+            base_angle_down=norm['base_angle_down'],
+            branch_angle_mean=np.deg2rad(branch_angle_mean_deg),
+            branch_angle_std=np.deg2rad(branch_angle_std_deg),
+            macula_center=norm['macula_center'],
+            macula_radius=norm['macula_radius'],
+            density_map=density_map,
+            density_weight=density_weight,
+            random_seed=random_seed,
+        )
+
+
+# =============================================================================
+# Geometry helpers
+# =============================================================================
 
 def segments_intersect(
     p1: Tuple[float, float],
@@ -94,6 +158,10 @@ def segments_intersect(
 
     return False
 
+
+# =============================================================================
+# Baseline generator
+# =============================================================================
 
 class RetinalTreeGenerator:
     """Generates synthetic retinal vascular trees using recursive branching.
@@ -193,3 +261,86 @@ class RetinalTreeGenerator:
         """Return nodes that are not the start of any edge (leaf nodes)."""
         start_points = {e.start for e in self.edges}
         return [n for n in self.nodes if (n.x, n.y) not in start_points]
+
+
+# =============================================================================
+# Density-aware generator
+# =============================================================================
+
+class ConstrainedTreeGenerator(RetinalTreeGenerator):
+    """Extends the baseline generator with density-aware branching.
+
+    When a density map is provided, the effective maximum depth at each
+    location is modulated by the local vessel density. Regions with higher
+    density in the reference image allow deeper branching, producing more
+    vessels where the real retina has more vessels.
+    """
+
+    def _local_density(self, x: float, y: float) -> float:
+        """
+        Look up the local vessel density at normalized coordinates (x, y).
+
+        Returns a value in [0, 1]. Returns 0.5 if no density map is set.
+        """
+        dmap = self.config.density_map
+        if dmap is None:
+            return 0.5
+
+        grid_size = dmap.shape[0]
+        r = self.config.retina_radius
+
+        # Map (x, y) in [-r, r] to grid indices
+        gj = int((x / r + 1) / 2 * grid_size)
+        gi = int((1 - y / r) / 2 * grid_size)
+
+        gi = max(0, min(grid_size - 1, gi))
+        gj = max(0, min(grid_size - 1, gj))
+
+        return float(dmap[gi, gj])
+
+    def _effective_max_depth(self, x: float, y: float) -> int:
+        """
+        Compute the effective max depth at position (x, y) based on
+        local vessel density.
+
+        High-density regions get up to max_depth + 2 additional levels.
+        Low-density regions may get reduced depth.
+        """
+        base_depth = self.config.max_depth
+        density = self._local_density(x, y)
+        w = self.config.density_weight
+
+        # Density modulation: map density [0, 1] to depth adjustment [-1, +2]
+        adjustment = int(round((density - 0.3) * 3 * w))
+        return max(2, base_depth + adjustment)
+
+    def grow_branch(
+        self, node: Node, angle: float, length: float, depth: int
+    ) -> None:
+        """Recursively grow a branch with density-aware depth control."""
+        effective_depth = self._effective_max_depth(node.x, node.y)
+
+        if depth > effective_depth or length < self.config.min_length:
+            return
+
+        new_x = node.x + length * np.cos(angle)
+        new_y = node.y + length * np.sin(angle)
+
+        if not self.inside_retina(new_x, new_y):
+            return
+
+        start, end = (node.x, node.y), (new_x, new_y)
+
+        if self.segment_hits_macula(start, end) or self.segment_crosses_existing(start, end):
+            return
+
+        child = Node(new_x, new_y, depth)
+        self.nodes.append(child)
+        self.edges.append(Edge(start=start, end=end, depth=depth, length=length))
+
+        next_length = self.config.alpha * length
+        delta_left = self.rng.normal(self.config.branch_angle_mean, self.config.branch_angle_std)
+        delta_right = self.rng.normal(self.config.branch_angle_mean, self.config.branch_angle_std)
+
+        self.grow_branch(child, angle + delta_left, next_length, depth + 1)
+        self.grow_branch(child, angle - delta_right, next_length, depth + 1)
