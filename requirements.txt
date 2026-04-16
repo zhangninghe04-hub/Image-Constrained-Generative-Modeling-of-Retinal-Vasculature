@@ -1,0 +1,15 @@
+# Core scientific computing
+numpy>=1.24
+matplotlib>=3.7
+pandas>=2.0
+
+# Image processing (for constraint extraction)
+scikit-image>=0.21
+opencv-python>=4.8
+
+# Spatial analysis
+scipy>=1.11
+
+# Jupyter notebooks
+jupyterlab>=4.0
+ipykernel>=6.0

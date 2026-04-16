@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+build/
+dist/
+*.whl
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Data (large image files — not tracked by git)
+data/raw/**/*.jpg
+data/raw/**/*.jpeg
+data/raw/**/*.png
+data/raw/**/*.tif
+data/raw/**/*.tiff
+data/raw/**/*.bmp
+
+# Papers (PDFs too large for git)
+papers/*.pdf
+
+# Temporary outputs
+*.log
+*.tmp
+*.bak
+
+# Claude Code
+.claude/
+
+# Original root-level files (now organized into subdirectories)
+/healthy/
+/Untitled-2.ipynb
+/TSP_CMES_13632.pdf
+/proposal.pdf
