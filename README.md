@@ -2,7 +2,7 @@
 
 **Author:** Ninghe Zhang
 **Date:** March 2026
-**Status:** Early development — baseline branching model implemented, evaluation pipeline in progress
+**Status:** Fundus-only image-constrained and density-aware model in progress; OCTA extension deferred until data are available
 
 ---
 
@@ -48,11 +48,14 @@ This project takes a different approach: rather than reconstructing vessels from
 - [x] Coverage score metric (nearest-neighbor distance std)
 - [x] Parameter sweep experiment (alpha x branch angle x seed)
 - [x] Visualization (network plot, terminal node distribution)
-- [ ] Image constraint extraction from fundus/OCTA data
-- [ ] Optic disc detection and orientation extraction
-- [ ] Vessel density map constraint
-- [ ] Extended evaluation metrics (fractal dimension, branch angle statistics)
+- [x] Fundus image constraint extraction
+- [x] Optic disc detection and orientation extraction
+- [x] Fundus-derived vessel density map constraint
+- [x] Density-aware depth, direction, and survival rules
+- [x] Extended evaluation metrics (fractal dimension, branch angle statistics, density metrics)
+- [x] Ablation setup for density depth/direction/survival rules
 - [ ] Comparison with real vascular topology
+- [ ] OCTA-derived constraints when OCTA data become available
 
 ## Repository Structure
 

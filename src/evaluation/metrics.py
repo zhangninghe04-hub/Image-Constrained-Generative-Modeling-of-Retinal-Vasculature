@@ -63,6 +63,55 @@ def coverage_score(terminal_points: List[Tuple[float, float]]) -> float:
     return float(np.std(nn))
 
 
+def coverage_dispersion(terminal_points: List[Tuple[float, float]]) -> float:
+    """
+    Alias for nearest-neighbor standard deviation.
+
+    This is kept separate from positive coverage metrics because lower
+    dispersion means more uniform spacing, while higher spatial coverage
+    should mean more of the retinal field is reached.
+    """
+    return coverage_score(terminal_points)
+
+
+def occupied_grid_coverage(
+    terminal_points: List[Tuple[float, float]],
+    grid_size: int = 20,
+    domain_radius: float = 1.0,
+) -> float:
+    """
+    Fraction of retinal grid cells occupied by at least one terminal node.
+
+    Higher values indicate broader spatial reach. Cells outside the circular
+    retina domain are excluded from the denominator.
+    """
+    if len(terminal_points) == 0:
+        return float("nan")
+
+    occupied = np.zeros((grid_size, grid_size), dtype=bool)
+    in_retina = np.zeros((grid_size, grid_size), dtype=bool)
+
+    coords = np.linspace(-domain_radius, domain_radius, grid_size, endpoint=False)
+    cell = (2 * domain_radius) / grid_size
+    centers = coords + cell / 2
+    for gi, y in enumerate(centers[::-1]):
+        for gj, x in enumerate(centers):
+            in_retina[gi, gj] = np.sqrt(x * x + y * y) <= domain_radius
+
+    for x, y in terminal_points:
+        gi = int((1 - y / domain_radius) / 2 * grid_size)
+        gj = int((x / domain_radius + 1) / 2 * grid_size)
+        gi = max(0, min(grid_size - 1, gi))
+        gj = max(0, min(grid_size - 1, gj))
+        if in_retina[gi, gj]:
+            occupied[gi, gj] = True
+
+    denominator = int(in_retina.sum())
+    if denominator == 0:
+        return float("nan")
+    return float(np.logical_and(occupied, in_retina).sum() / denominator)
+
+
 def coverage_uniformity(terminal_points: List[Tuple[float, float]]) -> float:
     """
     Compute coverage uniformity as the coefficient of variation of
@@ -361,5 +410,35 @@ def density_correlation(
     if mask.sum() < 3:
         return float("nan")
 
+    if np.std(g_flat[mask]) == 0 or np.std(t_flat[mask]) == 0:
+        return float("nan")
+
     corr = np.corrcoef(g_flat[mask], t_flat[mask])
     return float(corr[0, 1])
+
+
+def terminal_density_score(
+    terminal_points: List[Tuple[float, float]],
+    target_density: np.ndarray,
+    domain_radius: float = 1.0,
+) -> float:
+    """
+    Mean target-density value sampled at terminal node locations.
+
+    This complements density_correlation. It directly asks whether terminal
+    nodes land in regions that the reference fundus segmentation marks as
+    vessel-dense, so higher values indicate stronger local density matching.
+    """
+    if len(terminal_points) == 0:
+        return float("nan")
+
+    grid_size = target_density.shape[0]
+    sampled = []
+    for x, y in terminal_points:
+        gi = int((1 - y / domain_radius) / 2 * grid_size)
+        gj = int((x / domain_radius + 1) / 2 * grid_size)
+        gi = max(0, min(grid_size - 1, gi))
+        gj = max(0, min(grid_size - 1, gj))
+        sampled.append(target_density[gi, gj])
+
+    return float(np.mean(sampled))

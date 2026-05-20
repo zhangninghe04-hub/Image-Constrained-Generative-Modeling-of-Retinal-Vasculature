@@ -61,7 +61,11 @@ class TreeGeneratorConfig:
 
     # Density-aware branching (optional)
     density_map: Optional[np.ndarray] = None
-    density_weight: float = 0.5  # How much density influences max_depth
+    density_weight: float = 0.5
+    density_depth_weight: float = 1.0
+    density_direction_weight: float = 0.35
+    density_survival_weight: float = 0.25
+    density_candidate_angles: int = 5
 
     random_seed: Optional[int] = 42
 
@@ -75,6 +79,10 @@ class TreeGeneratorConfig:
         branch_angle_std_deg: float = 7,
         initial_length: float = 0.23,
         density_weight: float = 0.5,
+        density_depth_weight: float = 1.0,
+        density_direction_weight: float = 0.35,
+        density_survival_weight: float = 0.25,
+        density_candidate_angles: int = 5,
         random_seed: Optional[int] = 42,
     ) -> "TreeGeneratorConfig":
         """
@@ -89,7 +97,15 @@ class TreeGeneratorConfig:
         alpha, max_depth, branch_angle_mean_deg, etc.
             Branching parameters (not image-derived).
         density_weight : float
-            Weight for density-guided depth adjustment (0 = ignore density).
+            Global density influence multiplier. Set to 0 to ignore density.
+        density_depth_weight : float
+            Relative weight for density-guided depth adjustment.
+        density_direction_weight : float
+            Relative weight for density-guided branch direction selection.
+        density_survival_weight : float
+            Relative weight for density-guided branch survival.
+        density_candidate_angles : int
+            Number of candidate directions sampled around each stochastic branch angle.
         random_seed : int, optional
             Random seed for reproducibility.
 
@@ -114,6 +130,10 @@ class TreeGeneratorConfig:
             macula_radius=norm['macula_radius'],
             density_map=density_map,
             density_weight=density_weight,
+            density_depth_weight=density_depth_weight,
+            density_direction_weight=density_direction_weight,
+            density_survival_weight=density_survival_weight,
+            density_candidate_angles=density_candidate_angles,
             random_seed=random_seed,
         )
 
@@ -270,10 +290,10 @@ class RetinalTreeGenerator:
 class ConstrainedTreeGenerator(RetinalTreeGenerator):
     """Extends the baseline generator with density-aware branching.
 
-    When a density map is provided, the effective maximum depth at each
-    location is modulated by the local vessel density. Regions with higher
-    density in the reference image allow deeper branching, producing more
-    vessels where the real retina has more vessels.
+    Density can influence growth in three separate ways:
+    effective branch depth, candidate branch direction, and post-geometry
+    branch survival. Each mechanism is separately weighted so the result
+    pipeline can run ablation studies.
     """
 
     def _local_density(self, x: float, y: float) -> float:
@@ -308,11 +328,67 @@ class ConstrainedTreeGenerator(RetinalTreeGenerator):
         """
         base_depth = self.config.max_depth
         density = self._local_density(x, y)
-        w = self.config.density_weight
+        w = self.config.density_weight * self.config.density_depth_weight
 
         # Density modulation: map density [0, 1] to depth adjustment [-1, +2]
         adjustment = int(round((density - 0.3) * 3 * w))
         return max(2, base_depth + adjustment)
+
+    def _candidate_endpoint(
+        self, node: Node, angle: float, length: float
+    ) -> Tuple[float, float]:
+        return (
+            node.x + length * np.cos(angle),
+            node.y + length * np.sin(angle),
+        )
+
+    def _select_density_guided_angle(
+        self, node: Node, angle: float, length: float
+    ) -> float:
+        """Choose a nearby branch angle whose endpoint has higher density."""
+        w = self.config.density_weight * self.config.density_direction_weight
+        n_candidates = max(1, int(self.config.density_candidate_angles))
+        if self.config.density_map is None or w <= 0 or n_candidates == 1:
+            return angle
+
+        offsets = np.linspace(
+            -self.config.branch_angle_std,
+            self.config.branch_angle_std,
+            n_candidates,
+        )
+
+        best_angle = angle
+        best_score = -np.inf
+        for offset in offsets:
+            candidate_angle = angle + offset
+            end_x, end_y = self._candidate_endpoint(node, candidate_angle, length)
+            if not self.inside_retina(end_x, end_y):
+                continue
+            density = self._local_density(end_x, end_y)
+            angular_penalty = abs(offset) / (self.config.branch_angle_std + 1e-9)
+            score = w * density - (1.0 - w) * 0.15 * angular_penalty
+            if score > best_score:
+                best_score = score
+                best_angle = candidate_angle
+
+        return best_angle
+
+    def _density_survival_probability(self, x: float, y: float, depth: int) -> float:
+        """Return the density-based survival probability for a candidate."""
+        w = self.config.density_weight * self.config.density_survival_weight
+        if self.config.density_map is None or w <= 0:
+            return 1.0
+
+        density = self._local_density(x, y)
+        depth_fraction = depth / max(1, self.config.max_depth)
+        base_survival = 0.96 - 0.08 * depth_fraction
+        density_bonus = w * (density - 0.35)
+        return float(np.clip(base_survival + density_bonus, 0.55, 0.99))
+
+    def _branch_survives_density(self, x: float, y: float, depth: int) -> bool:
+        """Apply density-based survival after geometry checks pass."""
+        survival_probability = self._density_survival_probability(x, y, depth)
+        return bool(self.rng.random() <= survival_probability)
 
     def grow_branch(
         self, node: Node, angle: float, length: float, depth: int
@@ -323,8 +399,8 @@ class ConstrainedTreeGenerator(RetinalTreeGenerator):
         if depth > effective_depth or length < self.config.min_length:
             return
 
-        new_x = node.x + length * np.cos(angle)
-        new_y = node.y + length * np.sin(angle)
+        angle = self._select_density_guided_angle(node, angle, length)
+        new_x, new_y = self._candidate_endpoint(node, angle, length)
 
         if not self.inside_retina(new_x, new_y):
             return
@@ -332,6 +408,9 @@ class ConstrainedTreeGenerator(RetinalTreeGenerator):
         start, end = (node.x, node.y), (new_x, new_y)
 
         if self.segment_hits_macula(start, end) or self.segment_crosses_existing(start, end):
+            return
+
+        if not self._branch_survives_density(new_x, new_y, depth):
             return
 
         child = Node(new_x, new_y, depth)

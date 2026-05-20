@@ -24,7 +24,8 @@ from src.generative_models.branching_model import (
 )
 from src.evaluation.metrics import (
     coverage_score, coverage_uniformity, length_per_terminal,
-    fractal_dimension_box_counting, branch_angle_statistics, density_correlation
+    fractal_dimension_box_counting, branch_angle_statistics, density_correlation,
+    coverage_dispersion, occupied_grid_coverage, terminal_density_score
 )
 
 figures_dir = Path("figures")
@@ -36,6 +37,58 @@ EVALUATION_IMAGES = [
     "06_h.jpg", "07_h.jpg", "08_h.jpg", "09_h.jpg", "10_h.jpg",
     "11_h.jpg", "12_h.jpg", "13_h.jpg", "14_h.jpg", "15_h.jpg",
 ]
+
+DENSITY_WEIGHT = 0.6
+
+MODEL_SPECS = [
+    {"label": "Baseline", "class": RetinalTreeGenerator, "from_constraints": False, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0},
+    {"label": "Constrained", "class": RetinalTreeGenerator, "from_constraints": True, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0},
+    {"label": "Density Depth Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 1.0, "direction": 0.0, "survival": 0.0},
+    {"label": "Density Direction Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 1.0, "survival": 0.0},
+    {"label": "Density Survival Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.0, "survival": 1.0},
+    {"label": "Density-Aware", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 1.0, "direction": 1.0, "survival": 1.0},
+]
+
+
+def build_generator(spec, constraints=None):
+    if spec["from_constraints"]:
+        cfg = TreeGeneratorConfig.from_constraints(
+            constraints,
+            density_weight=spec["density_weight"],
+            density_depth_weight=spec["depth"],
+            density_direction_weight=spec["direction"],
+            density_survival_weight=spec["survival"],
+            random_seed=42,
+        )
+    else:
+        cfg = TreeGeneratorConfig(random_seed=42)
+
+    gen = spec["class"](cfg)
+    gen.generate()
+    return gen
+
+
+def evaluate_generator(gen, image_name, model_name, target_density):
+    terms = [(n.x, n.y) for n in gen.terminal_nodes()]
+    pts = [(n.x, n.y) for n in gen.nodes]
+    edge_lengths = [e.length for e in gen.edges]
+    fd, _, _ = fractal_dimension_box_counting(pts)
+    ba = branch_angle_statistics(gen.edges)
+    return {
+        "image": image_name,
+        "model": model_name,
+        "edges": len(gen.edges),
+        "terminals": len(gen.terminal_nodes()),
+        "length": gen.total_length(),
+        "length_per_terminal": length_per_terminal(edge_lengths, len(terms)),
+        "coverage_dispersion": coverage_dispersion(terms),
+        "coverage_uniformity": coverage_uniformity(terms),
+        "occupied_grid_coverage": occupied_grid_coverage(terms),
+        "fractal_dim": fd,
+        "branch_angle": ba["mean_total_angle"],
+        "density_corr": density_correlation(terms, target_density),
+        "terminal_density_score": terminal_density_score(terms, target_density),
+    }
 
 # ─────────────────────────────────────────────
 # Helper: draw a single generator onto axes
@@ -62,11 +115,12 @@ def draw_tree(ax, gen, title):
     ax.set_title(title, fontsize=9, pad=4)
     ax.axis("off")
 
-    cov = coverage_score([(n.x, n.y) for n in terms])
+    cov = coverage_dispersion([(n.x, n.y) for n in terms])
+    occ = occupied_grid_coverage([(n.x, n.y) for n in terms])
     fd,_,_ = fractal_dimension_box_counting([(n.x, n.y) for n in gen.nodes])
     ax.text(0.02, 0.02,
             f"edges={len(gen.edges)}  terminals={len(terms)}\n"
-            f"coverage={cov:.4f}  FD={fd:.3f}",
+            f"dispersion={cov:.4f}  grid={occ:.3f}  FD={fd:.3f}",
             transform=ax.transAxes, fontsize=7, va="bottom",
             color="#222222",
             bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7, lw=0))
@@ -148,19 +202,9 @@ for ri, name in enumerate(SAMPLE_IMAGES):
     img = cv2.imread(f"data/raw/healthy/{name}")
     cst = extract_all_constraints(img)
 
-    # Baseline
-    bg = RetinalTreeGenerator(TreeGeneratorConfig(random_seed=42))
-    bg.generate()
-
-    # Image-constrained
-    cg = RetinalTreeGenerator(
-        TreeGeneratorConfig.from_constraints(cst, density_weight=0.0, random_seed=42))
-    cg.generate()
-
-    # Density-aware
-    dg = ConstrainedTreeGenerator(
-        TreeGeneratorConfig.from_constraints(cst, density_weight=0.6, random_seed=42))
-    dg.generate()
+    bg = build_generator(MODEL_SPECS[0])
+    cg = build_generator(MODEL_SPECS[1], cst)
+    dg = build_generator(MODEL_SPECS[-1], cst)
 
     for ci, (gen, label) in enumerate([(bg,"Baseline"),
                                         (cg,"Constrained"),
@@ -186,9 +230,7 @@ fig.suptitle("Vessel Segmentation  |  Density Map  |  Terminal Node Distribution
 for ri, name in enumerate(SAMPLE_IMAGES):
     img = cv2.imread(f"data/raw/healthy/{name}")
     cst = extract_all_constraints(img)
-    cfg = TreeGeneratorConfig.from_constraints(cst, density_weight=0.6, random_seed=42)
-    gen = ConstrainedTreeGenerator(cfg)
-    gen.generate()
+    gen = build_generator(MODEL_SPECS[-1], cst)
 
     # Col 0: vessel segmentation
     axes[ri,0].imshow(cst["vessel_mask"], cmap="gray")
@@ -240,47 +282,30 @@ for name in EVALUATION_IMAGES:
     cst = extract_all_constraints(img)
     target_d = cst["vessel_density_map"]
 
-    for label, GenClass, dw in [
-        ("Baseline",        RetinalTreeGenerator,    0.0),
-        ("Constrained",     RetinalTreeGenerator,    0.0),
-        ("Density-Aware",   ConstrainedTreeGenerator,0.6),
-    ]:
-        if label == "Baseline":
-            cfg = TreeGeneratorConfig(random_seed=42)
-        else:
-            cfg = TreeGeneratorConfig.from_constraints(cst, density_weight=dw, random_seed=42)
-        gen = GenClass(cfg); gen.generate()
-        terms = [(n.x,n.y) for n in gen.terminal_nodes()]
-        pts   = [(n.x,n.y) for n in gen.nodes]
-        fd,_,_ = fractal_dimension_box_counting(pts)
-        ba = branch_angle_statistics(gen.edges)
-        all_rows.append({
-            "image":  name,
-            "model":  label,
-            "edges":  len(gen.edges),
-            "terminals": len(gen.terminal_nodes()),
-            "length": gen.total_length(),
-            "coverage": coverage_score(terms),
-            "fractal_dim": fd,
-            "branch_angle": ba["mean_total_angle"],
-            "density_corr": density_correlation(terms, target_d),
-        })
+    for spec in MODEL_SPECS:
+        gen = build_generator(spec, cst)
+        all_rows.append(evaluate_generator(gen, name, spec["label"], target_d))
 
 df = pd.DataFrame(all_rows)
 summary = df.groupby("model")[
-    ["edges","terminals","length","coverage","fractal_dim","branch_angle","density_corr"]
+    [
+        "edges", "terminals", "length", "length_per_terminal",
+        "coverage_dispersion", "coverage_uniformity", "occupied_grid_coverage",
+        "fractal_dim", "branch_angle", "density_corr", "terminal_density_score",
+    ]
 ].mean().round(3)
+summary = summary.reindex([spec["label"] for spec in MODEL_SPECS])
 
 # Save CSV
 df.to_csv("results/evaluation_results.csv", index=False)
 summary.to_csv("results/evaluation_summary.csv")
+summary.loc[[spec["label"] for spec in MODEL_SPECS[2:]]].to_csv("results/ablation_summary.csv")
 print("  -> saved results/evaluation_results.csv")
 
-metrics = ["terminals", "length", "coverage", "fractal_dim", "branch_angle", "density_corr"]
-metric_labels = ["# Terminals", "Total Length", "Coverage Score",
-                 "Fractal Dimension", "Mean Branch Angle (°)", "Density Correlation"]
-colors_bar = ["#5b9bd5", "#ed7d31", "#70ad47"]
-model_order = ["Baseline", "Constrained", "Density-Aware"]
+metrics = ["terminals", "length", "occupied_grid_coverage", "coverage_dispersion", "density_corr", "terminal_density_score"]
+metric_labels = ["# Terminals", "Total Length", "Occupied Grid Coverage", "Coverage Dispersion", "Density Correlation", "Terminal Density Score"]
+colors_bar = ["#5b9bd5", "#ed7d31", "#a5a5a5", "#ffc000", "#4472c4", "#70ad47"]
+model_order = [spec["label"] for spec in MODEL_SPECS]
 
 fig, axes = plt.subplots(2, 3, figsize=(14, 8))
 fig.suptitle("Evaluation Metrics - Average over 15 Fundus Images", fontsize=13)

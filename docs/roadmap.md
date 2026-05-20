@@ -23,26 +23,33 @@
 - [x] Implement total vessel length metric
 - [x] Build parameter sweep experiment runner
 - [x] Generate summary tables across parameter combinations
-- [ ] Add fractal dimension computation
-- [ ] Add branch angle distribution analysis
-- [ ] Add statistical comparison tooling
+- [x] Add fractal dimension computation
+- [x] Add branch angle distribution analysis
+- [x] Add density correlation and terminal density score
+- [x] Add occupied grid coverage as a positive coverage metric
+- [ ] Calibrate coverage and density metrics against qualitative results
 
-## Milestone 4: Data Organization and Image Preprocessing (Planned)
+## Milestone 4: Data Organization and Image Preprocessing (In Progress)
 
 - [ ] Organize healthy retinal image dataset (15 images available)
-- [ ] Implement fundus image preprocessing pipeline
-- [ ] Implement optic disc detection
-- [ ] Implement major vessel orientation extraction
-- [ ] Generate vessel density maps from OCTA images (if OCTA data available)
-- [ ] Define a standard constraint data format
+- [x] Implement fundus image preprocessing pipeline
+- [x] Implement optic disc detection
+- [x] Implement major vessel orientation extraction
+- [x] Generate fundus-derived vessel density maps
+- [x] Define a standard constraint data format
+- [ ] Add OCTA-derived density maps if OCTA data become available
 
-## Milestone 5: Image-Constrained Generation (Planned)
+## Milestone 5: Image-Constrained Generation (In Progress)
 
-- [ ] Integrate extracted optic disc location as root position
-- [ ] Use extracted vessel orientations for initial branch angles
-- [ ] Incorporate density maps as branching probability modifiers
-- [ ] Implement per-image constrained generation pipeline
-- [ ] Compare constrained vs. unconstrained generation results
+- [x] Integrate extracted optic disc location as root position
+- [x] Use extracted vessel orientations for initial branch angles
+- [x] Incorporate density maps as branch depth modifiers
+- [x] Incorporate density-guided branch direction
+- [x] Incorporate density-based branch survival
+- [x] Implement per-image constrained generation pipeline
+- [x] Compare baseline, constrained, and density-aware generation results
+- [x] Add ablation variants for depth-only, direction-only, and survival-only density rules
+- [ ] Tune density-aware rules to reduce over-pruning while preserving coverage gains
 
 ## Milestone 6: Advanced Branching Rules (Planned)
 
@@ -56,6 +63,7 @@
 - [ ] Segment vessels from healthy retinal images
 - [ ] Extract topological features from real vascular networks
 - [ ] Compare generated networks with real networks (density, branching angles, fractal dimension)
+- [ ] Interpret density correlation and terminal density score against qualitative figures
 - [ ] Produce final evaluation report and figures
 
 ## Milestone 8: Documentation and Publication (Future)

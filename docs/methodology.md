@@ -4,20 +4,20 @@ This document describes the intended computational pipeline for the project. The
 
 ## Stage 1: Image Constraint Extraction
 
-**Goal:** Extract structural features from fundus and OCTA images to serve as constraints for the generative model.
+**Goal:** Extract structural features from retinal images to serve as constraints for the generative model. The current implementation is fundus-only because OCTA data are not yet available.
 
 ### Planned constraint types:
 
 - **Optic disc location** — Detected from fundus images using intensity-based or morphological methods. Defines the root position for the vascular tree.
 - **Major vessel orientation** — The initial branching directions (superior and inferior temporal arcades) extracted from vessel segmentation or orientation analysis.
-- **Regional vessel density** — Derived from OCTA images. Provides a spatial map indicating where branching should be denser or sparser.
-- **Macula avascular zone (FAZ)** — The foveal region where vessels are absent. Currently modeled as a circular exclusion zone; future work may extract its actual shape from OCTA.
+- **Regional vessel density** — Currently derived from fundus vessel segmentation. OCTA-derived density remains future work.
+- **Macula avascular zone (FAZ)** — The foveal region where vessels are absent. Currently modeled as a circular exclusion zone; future work may extract its actual shape if OCTA data become available.
 
 ### Current status:
 
-- Optic disc position is currently set manually as a model parameter
-- Macula avascular zone is modeled as a fixed circular region
-- Automated extraction from images is planned but not yet implemented
+- Retina boundary, optic disc, macula estimate, vessel segmentation, fundus density map, and coarse vessel orientation are implemented for fundus images.
+- The current model should be interpreted as the fundus-constrained component of the original multimodal proposal.
+- OCTA-based constraints are deferred until OCTA data become available.
 
 ## Stage 2: Generative Branching Model
 
@@ -55,7 +55,7 @@ The implemented model (`RetinalTreeGenerator`) works as follows:
 
 ### Planned extensions:
 
-- **Density-guided branching:** Adjust branching probability or depth based on regional vessel density maps
+- **Density-guided branching:** Implemented as separable depth, direction, and survival mechanisms so ablation studies can isolate which part improves density response and which part causes over-pruning
 - **Murray's law integration:** Constrain branch radii and angles according to Murray's law of minimum work
 - **Optimization-based rules:** Use energy minimization to determine branch placement
 
@@ -65,15 +65,17 @@ The implemented model (`RetinalTreeGenerator`) works as follows:
 
 ### Implemented metrics:
 
-- **Coverage score** — Standard deviation of nearest-neighbor distances among terminal nodes. Lower values indicate more uniform spatial distribution.
+- **Coverage dispersion** — Standard deviation of nearest-neighbor distances among terminal nodes. Lower values indicate more uniform spatial distribution.
+- **Occupied grid coverage** — Fraction of circular retinal grid cells containing at least one terminal node. Higher values indicate broader retinal reach.
 - **Total vessel length** — Sum of all segment lengths. Measures structural cost.
 - **Terminal node count** — Number of leaf nodes in the generated tree.
+- **Density correlation** — Correlation between generated terminal density and image-derived vessel-density map.
+- **Terminal density score** — Mean fundus-derived vessel-density value sampled at generated terminal locations.
 
 ### Planned metrics:
 
 - **Fractal dimension** — Box-counting dimension to quantify the space-filling properties of the generated network
 - **Branch angle distribution** — Statistical comparison of generated branch angles with empirically observed distributions
-- **Vessel density correlation** — Correlation between generated vessel density and image-derived density maps
 - **Topological comparison** — Graph-based comparison with segmented vascular structures from real images
 
 ## Parameter Experiment Framework
