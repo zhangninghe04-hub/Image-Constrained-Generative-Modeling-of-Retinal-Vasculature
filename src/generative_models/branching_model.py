@@ -64,7 +64,7 @@ class TreeGeneratorConfig:
     density_weight: float = 0.5
     density_depth_weight: float = 1.0
     density_direction_weight: float = 0.35
-    density_survival_weight: float = 0.25
+    density_survival_weight: float = 0.10
     density_candidate_angles: int = 5
 
     random_seed: Optional[int] = 42
@@ -81,7 +81,7 @@ class TreeGeneratorConfig:
         density_weight: float = 0.5,
         density_depth_weight: float = 1.0,
         density_direction_weight: float = 0.35,
-        density_survival_weight: float = 0.25,
+        density_survival_weight: float = 0.10,
         density_candidate_angles: int = 5,
         random_seed: Optional[int] = 42,
     ) -> "TreeGeneratorConfig":

@@ -11,8 +11,12 @@ used to parameterize the generative branching model:
 """
 
 import numpy as np
-import cv2
 from typing import Tuple, Optional, Dict, Any
+
+try:
+    import cv2
+except ImportError:  # pragma: no cover - exercised in lightweight runtime tests
+    cv2 = None
 
 
 # =============================================================================
@@ -504,6 +508,9 @@ def extract_all_constraints(
         - 'vessel_mask': np.ndarray (H x W, binary)
         - 'normalized': dict with all positions in normalized [-1, 1] coords
     """
+    if cv2 is None:
+        return _extract_all_constraints_fallback(image, density_grid_size)
+
     # Step 1: Retina boundary
     retina_center, retina_radius = detect_retina_boundary(image)
 
@@ -553,6 +560,142 @@ def extract_all_constraints(
             'retina_radius': 1.0,
             'root': od_norm,
             'macula_center': mac_norm,
+            'macula_radius': float(mac_radius / retina_radius),
+            'base_angle_up': angle_sup,
+            'base_angle_down': angle_inf,
+        },
+    }
+
+
+# =============================================================================
+# Lightweight fallback path
+# =============================================================================
+
+def _rgb_image(image: np.ndarray) -> np.ndarray:
+    arr = np.asarray(image)
+    if arr.ndim == 2:
+        return np.stack([arr, arr, arr], axis=-1)
+    return arr[:, :, :3]
+
+
+def _fallback_retina_boundary(image: np.ndarray) -> Tuple[Tuple[int, int], int]:
+    rgb = _rgb_image(image).astype(float)
+    gray = rgb.mean(axis=2)
+    mask = gray > 15
+    ys, xs = np.where(mask)
+    if len(xs) == 0:
+        h, w = gray.shape
+        return (w // 2, h // 2), min(w, h) // 2
+
+    x0, x1 = xs.min(), xs.max()
+    y0, y1 = ys.min(), ys.max()
+    cx = int((x0 + x1) / 2)
+    cy = int((y0 + y1) / 2)
+    radius = int(min(x1 - x0, y1 - y0) / 2)
+    return (cx, cy), max(radius, 1)
+
+
+def _circle_mask(shape, center, radius):
+    h, w = shape
+    yy, xx = np.ogrid[:h, :w]
+    return (xx - center[0]) ** 2 + (yy - center[1]) ** 2 <= radius ** 2
+
+
+def _fallback_optic_disc(image, retina_center, retina_radius):
+    rgb = _rgb_image(image).astype(float)
+    h, w = rgb.shape[:2]
+    mask = _circle_mask((h, w), retina_center, int(retina_radius * 0.9))
+    red = rgb[:, :, 0]
+    gray = rgb.mean(axis=2)
+    score = 0.6 * red + 0.4 * gray
+    score = np.where(mask, score, -np.inf)
+    max_score = np.nanmax(score)
+    candidates = score >= max_score - 8
+    ys, xs = np.where(candidates & mask)
+    if len(xs) == 0:
+        y, x = np.unravel_index(np.nanargmax(score), score.shape)
+        center = (int(x), int(y))
+    else:
+        center = (int(xs.mean()), int(ys.mean()))
+    return center, max(5, int(retina_radius * 0.09))
+
+
+def _fallback_macula(image, optic_disc_center, retina_center, retina_radius):
+    od_x, od_y = optic_disc_center
+    dx = retina_center[0] - od_x
+    dy = retina_center[1] - od_y
+    dist = float(np.hypot(dx, dy))
+    if dist < 1:
+        center = retina_center
+    else:
+        scale = min(dist * 1.8, retina_radius * 0.6) / dist
+        center = (int(od_x + dx * scale), int(od_y + dy * scale))
+    return center, max(4, int(retina_radius * 0.12))
+
+
+def _fallback_segment_vessels(image, retina_center, retina_radius):
+    rgb = _rgb_image(image).astype(float)
+    green = rgb[:, :, 1]
+    h, w = green.shape
+    retina = _circle_mask((h, w), retina_center, int(retina_radius * 0.95))
+    vals = green[retina]
+    if vals.size == 0:
+        return np.zeros((h, w), dtype=np.uint8)
+    threshold = np.percentile(vals, 33)
+    mask = (green <= threshold) & retina
+    return (mask.astype(np.uint8) * 255)
+
+
+def _fallback_vessel_orientation(vessel_mask, optic_disc_center, optic_disc_radius, retina_radius):
+    od_x, od_y = optic_disc_center
+    ys, xs = np.where(vessel_mask > 0)
+    dx = xs - od_x
+    dy = -(ys - od_y)
+    distances = np.sqrt(dx ** 2 + dy ** 2)
+    in_annulus = (distances >= optic_disc_radius * 1.5) & (distances <= min(optic_disc_radius * 4.0, retina_radius - 10))
+    if np.sum(in_annulus) < 10:
+        return (np.deg2rad(155), np.deg2rad(205))
+
+    angles = np.arctan2(dy[in_annulus], dx[in_annulus])
+    hist, bin_edges = np.histogram(angles, bins=72, range=(-np.pi, np.pi))
+    kernel = np.ones(5) / 5
+    hist_smooth = np.convolve(np.r_[hist[-2:], hist, hist[:2]], kernel, mode="valid")
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    upper = bin_centers > 0
+    lower = bin_centers < 0
+    angle_sup = bin_centers[np.argmax(np.where(upper, hist_smooth, -1))]
+    angle_inf = bin_centers[np.argmax(np.where(lower, hist_smooth, -1))]
+    return (float(angle_sup), float(angle_inf))
+
+
+def _extract_all_constraints_fallback(image: np.ndarray, density_grid_size: int) -> Dict[str, Any]:
+    retina_center, retina_radius = _fallback_retina_boundary(image)
+    od_center, od_radius = _fallback_optic_disc(image, retina_center, retina_radius)
+    mac_center, mac_radius = _fallback_macula(image, od_center, retina_center, retina_radius)
+    vessel_mask = _fallback_segment_vessels(image, retina_center, retina_radius)
+    angle_sup, angle_inf = _fallback_vessel_orientation(vessel_mask, od_center, od_radius, retina_radius)
+    density_map = compute_vessel_density_map(vessel_mask, retina_center, retina_radius, density_grid_size)
+
+    def normalize_point(px, py):
+        nx = (px - retina_center[0]) / retina_radius
+        ny = -(py - retina_center[1]) / retina_radius
+        return (float(nx), float(ny))
+
+    return {
+        'retina_center': retina_center,
+        'retina_radius': retina_radius,
+        'optic_disc_center': od_center,
+        'optic_disc_radius': od_radius,
+        'macula_center': mac_center,
+        'macula_radius': mac_radius,
+        'angle_superior': angle_sup,
+        'angle_inferior': angle_inf,
+        'vessel_density_map': density_map,
+        'vessel_mask': vessel_mask,
+        'normalized': {
+            'retina_radius': 1.0,
+            'root': normalize_point(*od_center),
+            'macula_center': normalize_point(*mac_center),
             'macula_radius': float(mac_radius / retina_radius),
             'base_angle_up': angle_sup,
             'base_angle_down': angle_inf,

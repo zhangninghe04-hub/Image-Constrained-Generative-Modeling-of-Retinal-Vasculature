@@ -23,6 +23,14 @@ result pipeline can run ablation comparisons:
 - Density Survival Only
 - Full Density-Aware
 
+The latest calibrated full density-aware setting uses a lighter survival rule
+to avoid over-pruning:
+
+- density depth weight: `0.75`
+- density direction weight: `0.50`
+- density survival weight: `0.10`
+- global density weight: `0.60`
+
 ## Evaluation Priorities
 
 The next runs should focus on whether the full density-aware model preserves
@@ -56,6 +64,7 @@ The script writes:
 - `results/evaluation_results.csv`
 - `results/evaluation_summary.csv`
 - `results/ablation_summary.csv`
+- `results/latest_run_summary.md`
 - `figures/fig1_constraint_overlays.png`
 - `figures/fig2_model_comparison.png`
 - `figures/fig3_density_terminals.png`

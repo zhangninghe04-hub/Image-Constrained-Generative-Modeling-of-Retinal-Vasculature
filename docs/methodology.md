@@ -18,6 +18,7 @@ This document describes the intended computational pipeline for the project. The
 - Retina boundary, optic disc, macula estimate, vessel segmentation, fundus density map, and coarse vessel orientation are implemented for fundus images.
 - The current model should be interpreted as the fundus-constrained component of the original multimodal proposal.
 - OCTA-based constraints are deferred until OCTA data become available.
+- A lightweight Pillow/numpy fallback is available for result generation when OpenCV is not installed. This fallback is intended for reproducible batch runs and quick progress reporting; OpenCV-based extraction remains the preferred path when available.
 
 ## Stage 2: Generative Branching Model
 
