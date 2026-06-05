@@ -27,7 +27,10 @@
 - [x] Add branch angle distribution analysis
 - [x] Add density correlation and terminal density score
 - [x] Add occupied grid coverage as a positive coverage metric
-- [ ] Calibrate coverage and density metrics against qualitative results
+- [x] Add matched terminal-count density score
+- [x] Add density lift over random baseline
+- [x] Run focused parameter search for coverage-density tradeoff
+- [ ] Further calibrate density metrics against qualitative results
 
 ## Milestone 4: Data Organization and Image Preprocessing (In Progress)
 
@@ -49,7 +52,8 @@
 - [x] Implement per-image constrained generation pipeline
 - [x] Compare baseline, constrained, and density-aware generation results
 - [x] Add ablation variants for depth-only, direction-only, and survival-only density rules
-- [ ] Tune density-aware rules to reduce over-pruning while preserving coverage gains
+- [x] Tune density-aware rules to reduce over-pruning while preserving coverage gains
+- [ ] Improve density matching under recovered terminal count
 
 ## Milestone 6: Advanced Branching Rules (Planned)
 
@@ -64,6 +68,7 @@
 - [ ] Extract topological features from real vascular networks
 - [ ] Compare generated networks with real networks (density, branching angles, fractal dimension)
 - [ ] Interpret density correlation and terminal density score against qualitative figures
+- [x] Add terminal-over-density overlay figure
 - [ ] Produce final evaluation report and figures
 
 ## Milestone 8: Documentation and Publication (Future)
