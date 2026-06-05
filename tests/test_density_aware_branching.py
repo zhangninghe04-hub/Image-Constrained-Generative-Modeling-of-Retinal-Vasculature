@@ -2,7 +2,12 @@ import unittest
 
 import numpy as np
 
-from src.evaluation.metrics import occupied_grid_coverage, terminal_density_score
+from src.evaluation.metrics import (
+    density_lift_over_random,
+    matched_terminal_density_score,
+    occupied_grid_coverage,
+    terminal_density_score,
+)
 from src.generative_models.branching_model import (
     ConstrainedTreeGenerator,
     Node,
@@ -60,6 +65,29 @@ class DensityAwareBranchingTest(unittest.TestCase):
         two_cells = occupied_grid_coverage([(0.0, 0.0), (0.5, 0.0)], grid_size=10)
 
         self.assertGreater(two_cells, one_cell)
+
+    def test_matched_terminal_density_score_uses_requested_sample_size(self):
+        density = np.zeros((10, 10), dtype=float)
+        density[5, 5] = 1.0
+        density[5, 6] = 0.5
+        points = [(0.0, 0.0), (0.2, 0.0)]
+
+        score = matched_terminal_density_score(
+            points, density, sample_size=1, n_repeats=4, random_seed=1
+        )
+
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLessEqual(score, 1.0)
+
+    def test_density_lift_over_random_returns_finite_value(self):
+        density = np.zeros((10, 10), dtype=float)
+        density[5, 5] = 1.0
+
+        lift = density_lift_over_random(
+            [(0.0, 0.0)], density, sample_size=1, n_repeats=5, random_seed=1
+        )
+
+        self.assertTrue(np.isfinite(lift))
 
 
 if __name__ == "__main__":
