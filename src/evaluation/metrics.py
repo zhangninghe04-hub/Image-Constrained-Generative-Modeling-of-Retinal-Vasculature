@@ -442,3 +442,101 @@ def terminal_density_score(
         sampled.append(target_density[gi, gj])
 
     return float(np.mean(sampled))
+
+
+def matched_terminal_density_score(
+    terminal_points: List[Tuple[float, float]],
+    target_density: np.ndarray,
+    sample_size: Optional[int] = None,
+    n_repeats: int = 25,
+    random_seed: int = 42,
+    domain_radius: float = 1.0,
+) -> float:
+    """
+    Estimate terminal density score after matching terminal count.
+
+    When one model has many more terminals than another, direct density scores
+    can be misleading. This metric repeatedly samples the same number of
+    terminals and averages the density score on those matched subsets.
+    """
+    n_points = len(terminal_points)
+    if n_points == 0:
+        return float("nan")
+
+    if sample_size is None:
+        sample_size = n_points
+    sample_size = max(1, min(int(sample_size), n_points))
+
+    pts = list(terminal_points)
+    if sample_size == n_points:
+        return terminal_density_score(pts, target_density, domain_radius)
+
+    rng = np.random.default_rng(random_seed)
+    scores = []
+    for _ in range(n_repeats):
+        idx = rng.choice(n_points, size=sample_size, replace=False)
+        subset = [pts[i] for i in idx]
+        scores.append(terminal_density_score(subset, target_density, domain_radius))
+    return float(np.mean(scores))
+
+
+def random_retina_density_score(
+    target_density: np.ndarray,
+    sample_size: int,
+    n_repeats: int = 100,
+    random_seed: int = 42,
+    domain_radius: float = 1.0,
+) -> float:
+    """
+    Expected density score for uniformly random points inside the retina.
+    """
+    if sample_size <= 0:
+        return float("nan")
+
+    rng = np.random.default_rng(random_seed)
+    scores = []
+    for _ in range(n_repeats):
+        radii = domain_radius * np.sqrt(rng.random(sample_size))
+        angles = rng.uniform(0, 2 * np.pi, sample_size)
+        pts = list(zip(radii * np.cos(angles), radii * np.sin(angles)))
+        scores.append(terminal_density_score(pts, target_density, domain_radius))
+    return float(np.mean(scores))
+
+
+def density_lift_over_random(
+    terminal_points: List[Tuple[float, float]],
+    target_density: np.ndarray,
+    sample_size: Optional[int] = None,
+    n_repeats: int = 50,
+    random_seed: int = 42,
+    domain_radius: float = 1.0,
+) -> float:
+    """
+    Difference between matched terminal density score and random baseline.
+
+    Positive values indicate that generated terminals land in denser regions
+    than uniformly random retinal points with the same sample size.
+    """
+    n_points = len(terminal_points)
+    if n_points == 0:
+        return float("nan")
+    if sample_size is None:
+        sample_size = n_points
+    sample_size = max(1, min(int(sample_size), n_points))
+
+    matched = matched_terminal_density_score(
+        terminal_points,
+        target_density,
+        sample_size=sample_size,
+        n_repeats=n_repeats,
+        random_seed=random_seed,
+        domain_radius=domain_radius,
+    )
+    random_score = random_retina_density_score(
+        target_density,
+        sample_size=sample_size,
+        n_repeats=n_repeats,
+        random_seed=random_seed + 1009,
+        domain_radius=domain_radius,
+    )
+    return float(matched - random_score)
