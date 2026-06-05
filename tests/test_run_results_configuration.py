@@ -33,6 +33,16 @@ class RunResultsConfigurationTest(unittest.TestCase):
 
         self.assertIn("results/ablation_summary.csv", source)
 
+    def test_parameter_search_and_overlay_outputs_are_configured(self):
+        run_results = Path("run_results.py").read_text(encoding="utf-8")
+        search = Path("run_parameter_search.py").read_text(encoding="utf-8")
+
+        self.assertIn("fig5_terminal_density_overlay.png", run_results)
+        self.assertIn("matched_terminal_density_score", run_results)
+        self.assertIn("density_lift_over_random", run_results)
+        self.assertIn("results/parameter_search.csv", search)
+        self.assertIn("results/best_parameter_summary.md", search)
+
 
 if __name__ == "__main__":
     unittest.main()
