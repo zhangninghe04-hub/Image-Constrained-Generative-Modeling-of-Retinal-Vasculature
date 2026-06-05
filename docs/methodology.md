@@ -72,6 +72,8 @@ The implemented model (`RetinalTreeGenerator`) works as follows:
 - **Terminal node count** — Number of leaf nodes in the generated tree.
 - **Density correlation** — Correlation between generated terminal density and image-derived vessel-density map.
 - **Terminal density score** — Mean fundus-derived vessel-density value sampled at generated terminal locations.
+- **Matched terminal density score** — Density score after sampling each model down to the same terminal count, reducing bias from models that simply generate more terminals.
+- **Density lift over random** — Difference between matched terminal density score and a uniformly random retinal point baseline.
 
 ### Planned metrics:
 
@@ -89,3 +91,20 @@ The current codebase includes an experiment runner that:
 4. Produces a grouped summary table for comparison
 
 This framework can be extended to include new parameters and metrics as the model develops.
+
+## Parameter Search Framework
+
+The current codebase also includes `run_parameter_search.py`, which searches
+the fundus-only density-aware model over structural and density parameters.
+The current focused search varies `alpha`, `max_depth`, `initial_length`,
+density depth weight, density direction weight, and density survival weight.
+
+The search objective balances:
+
+1. recovering terminal count and occupied grid coverage
+2. improving matched terminal density score
+3. improving density lift over random
+4. avoiding excessive coverage dispersion
+
+The current selected setting emphasizes recovering spatial reach before further
+optimizing local density matching.
