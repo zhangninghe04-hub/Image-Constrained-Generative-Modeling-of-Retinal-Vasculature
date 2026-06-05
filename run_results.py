@@ -28,8 +28,10 @@ from src.evaluation.metrics import (
     coverage_dispersion,
     coverage_uniformity,
     density_correlation,
+    density_lift_over_random,
     fractal_dimension_box_counting,
     length_per_terminal,
+    matched_terminal_density_score,
     occupied_grid_coverage,
     terminal_density_score,
 )
@@ -49,13 +51,17 @@ EVALUATION_IMAGES = [
 ]
 
 DENSITY_WEIGHT = 0.6
+MODEL_ALPHA = 0.76
+MODEL_MAX_DEPTH = 7
+MODEL_INITIAL_LENGTH = 0.23
+MATCHED_SAMPLE_SIZE = 12
 MODEL_SPECS = [
     {"label": "Baseline", "class": RetinalTreeGenerator, "from_constraints": False, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0},
     {"label": "Constrained", "class": RetinalTreeGenerator, "from_constraints": True, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0},
     {"label": "Density Depth Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.75, "direction": 0.0, "survival": 0.0},
-    {"label": "Density Direction Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.5, "survival": 0.0},
-    {"label": "Density Survival Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.0, "survival": 0.10},
-    {"label": "Density-Aware", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.75, "direction": 0.5, "survival": 0.10},
+    {"label": "Density Direction Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.70, "survival": 0.0},
+    {"label": "Density Survival Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.0, "survival": 0.05},
+    {"label": "Density-Aware", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.75, "direction": 0.70, "survival": 0.0},
 ]
 
 MODEL_ORDER = [spec["label"] for spec in MODEL_SPECS]
@@ -70,6 +76,9 @@ def build_generator(spec, constraints=None):
     if spec["from_constraints"]:
         cfg = TreeGeneratorConfig.from_constraints(
             constraints,
+            alpha=MODEL_ALPHA,
+            max_depth=MODEL_MAX_DEPTH,
+            initial_length=MODEL_INITIAL_LENGTH,
             density_weight=spec["density_weight"],
             density_depth_weight=spec["depth"],
             density_direction_weight=spec["direction"],
@@ -90,6 +99,7 @@ def evaluate_generator(gen, image_name, model_name, target_density):
     edge_lengths = [e.length for e in gen.edges]
     fd, _, _ = fractal_dimension_box_counting(pts)
     ba = branch_angle_statistics(gen.edges)
+    matched_sample_size = min(MATCHED_SAMPLE_SIZE, len(terms))
     return {
         "image": image_name,
         "model": model_name,
@@ -104,6 +114,12 @@ def evaluate_generator(gen, image_name, model_name, target_density):
         "branch_angle": ba["mean_total_angle"],
         "density_corr": density_correlation(terms, target_density),
         "terminal_density_score": terminal_density_score(terms, target_density),
+        "matched_terminal_density_score": matched_terminal_density_score(
+            terms, target_density, sample_size=matched_sample_size
+        ),
+        "density_lift_over_random": density_lift_over_random(
+            terms, target_density, sample_size=matched_sample_size
+        ),
     }
 
 
@@ -258,13 +274,52 @@ def figure_density_terminals():
     canvas.save(figures_dir / "fig3_density_terminals.png")
 
 
+def draw_terminal_overlay(draw, density, gen, box, title, color):
+    x0, y0, w, h = box
+    heat = heatmap_image(density, min(w, h)).resize((w, h))
+    return heat
+
+
+def figure_terminal_density_overlay():
+    cell = 360
+    canvas = Image.new("RGB", (cell * 3, cell * 3 + 70), "white")
+    paste_title(canvas, (20, 16), "Terminal Nodes Over Fundus-Derived Density Map", 24)
+    draw = ImageDraw.Draw(canvas)
+    colors = {
+        "Baseline": (60, 130, 220),
+        "Constrained": (255, 210, 40),
+        "Density-Aware": (80, 230, 120),
+    }
+    for ri, name in enumerate(SAMPLE_IMAGES):
+        img = load_image(name)
+        constraints = extract_all_constraints(img)
+        density = constraints["vessel_density_map"]
+        gens = [
+            ("Baseline", build_generator(MODEL_SPECS[0])),
+            ("Constrained", build_generator(MODEL_SPECS[1], constraints)),
+            ("Density-Aware", build_generator(MODEL_SPECS[-1], constraints)),
+        ]
+        for ci, (label, gen) in enumerate(gens):
+            x = ci * cell + 12
+            y = ri * cell + 70
+            panel = heatmap_image(density, cell - 24)
+            canvas.paste(panel, (x, y + 12))
+            panel_box = (x, y + 12, cell - 24, cell - 24)
+            for term in gen.terminal_nodes():
+                px, py = normalize_to_panel(term.x, term.y, panel_box)
+                draw.ellipse([px - 4, py - 4, px + 4, py + 4], fill=colors[label], outline=(0, 0, 0))
+            draw.text((x + 6, y + 18), f"{name} - {label}", fill=(255, 255, 255), font=font(15))
+            draw.text((x + 6, y + cell - 34), f"terminals={len(gen.terminal_nodes())}", fill=(255, 255, 255), font=font(13))
+    canvas.save(figures_dir / "fig5_terminal_density_overlay.png")
+
+
 def figure_summary(summary):
     metrics = [
         ("terminals", "# Terminals"),
         ("length", "Total Length"),
         ("occupied_grid_coverage", "Occupied Grid Coverage"),
-        ("coverage_dispersion", "Coverage Dispersion"),
-        ("density_corr", "Density Correlation"),
+        ("matched_terminal_density_score", "Matched Density Score"),
+        ("density_lift_over_random", "Density Lift vs Random"),
         ("terminal_density_score", "Terminal Density Score"),
     ]
     w, h = 1500, 900
@@ -304,6 +359,7 @@ def main():
     figure_constraints()
     figure_model_comparison()
     figure_density_terminals()
+    figure_terminal_density_overlay()
 
     all_rows = []
     for name in EVALUATION_IMAGES:
@@ -320,6 +376,7 @@ def main():
             "edges", "terminals", "length", "length_per_terminal",
             "coverage_dispersion", "coverage_uniformity", "occupied_grid_coverage",
             "fractal_dim", "branch_angle", "density_corr", "terminal_density_score",
+            "matched_terminal_density_score", "density_lift_over_random",
         ]
     ].mean().round(3)
     summary = summary.reindex(MODEL_ORDER)
