@@ -66,6 +66,8 @@ class TreeGeneratorConfig:
     density_direction_weight: float = 0.35
     density_survival_weight: float = 0.10
     density_candidate_angles: int = 5
+    density_angle_span: float = 1.5
+    density_horizon_weight: float = 0.5
 
     random_seed: Optional[int] = 42
 
@@ -83,6 +85,8 @@ class TreeGeneratorConfig:
         density_direction_weight: float = 0.35,
         density_survival_weight: float = 0.10,
         density_candidate_angles: int = 5,
+        density_angle_span: float = 1.5,
+        density_horizon_weight: float = 0.5,
         random_seed: Optional[int] = 42,
     ) -> "TreeGeneratorConfig":
         """
@@ -106,6 +110,10 @@ class TreeGeneratorConfig:
             Relative weight for density-guided branch survival.
         density_candidate_angles : int
             Number of candidate directions sampled around each stochastic branch angle.
+        density_angle_span : float
+            Candidate angle range in multiples of branch_angle_std.
+        density_horizon_weight : float
+            Weight for density sampled beyond the immediate branch endpoint.
         random_seed : int, optional
             Random seed for reproducibility.
 
@@ -134,6 +142,8 @@ class TreeGeneratorConfig:
             density_direction_weight=density_direction_weight,
             density_survival_weight=density_survival_weight,
             density_candidate_angles=density_candidate_angles,
+            density_angle_span=density_angle_span,
+            density_horizon_weight=density_horizon_weight,
             random_seed=random_seed,
         )
 
@@ -345,18 +355,20 @@ class ConstrainedTreeGenerator(RetinalTreeGenerator):
     def _select_density_guided_angle(
         self, node: Node, angle: float, length: float
     ) -> float:
-        """Choose a nearby branch angle whose endpoint has higher density."""
+        """Choose a nearby branch angle with stronger forward density support."""
         w = self.config.density_weight * self.config.density_direction_weight
         n_candidates = max(1, int(self.config.density_candidate_angles))
         if self.config.density_map is None or w <= 0 or n_candidates == 1:
             return angle
 
+        angle_span = max(0.25, float(self.config.density_angle_span))
         offsets = np.linspace(
-            -self.config.branch_angle_std,
-            self.config.branch_angle_std,
+            -self.config.branch_angle_std * angle_span,
+            self.config.branch_angle_std * angle_span,
             n_candidates,
         )
 
+        current_density = self._local_density(node.x, node.y)
         best_angle = angle
         best_score = -np.inf
         for offset in offsets:
@@ -364,14 +376,37 @@ class ConstrainedTreeGenerator(RetinalTreeGenerator):
             end_x, end_y = self._candidate_endpoint(node, candidate_angle, length)
             if not self.inside_retina(end_x, end_y):
                 continue
-            density = self._local_density(end_x, end_y)
-            angular_penalty = abs(offset) / (self.config.branch_angle_std + 1e-9)
-            score = w * density - (1.0 - w) * 0.15 * angular_penalty
+            endpoint_density = self._local_density(end_x, end_y)
+            horizon_density = self._density_horizon_score(
+                node, candidate_angle, length, endpoint_density
+            )
+            density_gain = max(0.0, horizon_density - current_density)
+            angular_penalty = abs(offset) / (
+                self.config.branch_angle_std * angle_span + 1e-9
+            )
+            density_score = (
+                (1.0 - self.config.density_horizon_weight) * endpoint_density
+                + self.config.density_horizon_weight * horizon_density
+                + 0.35 * density_gain
+            )
+            score = w * density_score - (1.0 - w) * 0.12 * angular_penalty
             if score > best_score:
                 best_score = score
                 best_angle = candidate_angle
 
         return best_angle
+
+    def _density_horizon_score(
+        self, node: Node, angle: float, length: float, endpoint_density: float
+    ) -> float:
+        """Sample density slightly beyond the endpoint along the candidate direction."""
+        samples = [endpoint_density]
+        for scale in (1.35, 1.75):
+            x = node.x + length * scale * np.cos(angle)
+            y = node.y + length * scale * np.sin(angle)
+            if self.inside_retina(x, y):
+                samples.append(self._local_density(x, y))
+        return float(np.mean(samples))
 
     def _density_survival_probability(self, x: float, y: float, depth: int) -> float:
         """Return the density-based survival probability for a candidate."""
