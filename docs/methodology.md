@@ -53,10 +53,12 @@ The implemented model (`RetinalTreeGenerator`) works as follows:
 | `branch_angle_std` | Standard deviation of branching angle | 7° |
 | `macula_center` | Center of the macula avascular zone | (-0.25, 0.0) |
 | `macula_radius` | Radius of the macula avascular zone | 0.16 |
+| `density_angle_span` | Density-guided candidate angle range in multiples of branch-angle standard deviation | 1.5 |
+| `density_horizon_weight` | Weight assigned to short-horizon density sampled beyond the endpoint | 0.5 |
 
 ### Planned extensions:
 
-- **Density-guided branching:** Implemented as separable depth, direction, and survival mechanisms so ablation studies can isolate which part improves density response and which part causes over-pruning
+- **Density-guided branching:** Implemented as separable depth, direction, and survival mechanisms so ablation studies can isolate which part improves density response and which part causes over-pruning. Direction selection now uses both candidate endpoint density and short-horizon density sampled slightly beyond the endpoint.
 - **Murray's law integration:** Constrain branch radii and angles according to Murray's law of minimum work
 - **Optimization-based rules:** Use energy minimization to determine branch placement
 
@@ -97,7 +99,8 @@ This framework can be extended to include new parameters and metrics as the mode
 The current codebase also includes `run_parameter_search.py`, which searches
 the fundus-only density-aware model over structural and density parameters.
 The current focused search varies `alpha`, `max_depth`, `initial_length`,
-density depth weight, density direction weight, and density survival weight.
+density depth weight, density direction weight, density survival weight,
+density candidate angle span, and short-horizon density weight.
 
 The search objective balances:
 
@@ -106,5 +109,6 @@ The search objective balances:
 3. improving density lift over random
 4. avoiding excessive coverage dispersion
 
-The current selected setting emphasizes recovering spatial reach before further
-optimizing local density matching.
+The current selected setting preserves the target terminal-count range while
+improving density lift over random. Absolute terminal density matching remains
+an active fundus-only optimization target.
