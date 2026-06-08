@@ -69,6 +69,7 @@
 - [ ] Compare generated networks with real networks (density, branching angles, fractal dimension)
 - [ ] Interpret density correlation and terminal density score against qualitative figures
 - [x] Add terminal-over-density overlay figure
+- [x] Add short-horizon density sampling for direction selection
 - [ ] Produce final evaluation report and figures
 
 ## Milestone 8: Documentation and Publication (Future)
