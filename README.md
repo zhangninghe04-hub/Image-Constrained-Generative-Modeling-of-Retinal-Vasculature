@@ -101,6 +101,17 @@ This project takes a different approach: rather than reconstructing vessels from
 └── archive/                          # Older drafts or unused materials
 ```
 
+
+### Current Notebook Guide
+
+The notebooks are chronological:
+
+- `notebooks/01_baseline_branching_model.ipynb` — early baseline branching model.
+- `notebooks/02_image_constrained_pipeline.ipynb` — early image-constrained pipeline.
+- `notebooks/03_parameter_search_density_evaluation.ipynb` — current fundus-only parameter search, fair density metrics, and latest visual results.
+
+For the most recent project state, start with notebook 03 and `results/latest_run_summary.md`.
+
 ## Planned Workflow
 
 ```
