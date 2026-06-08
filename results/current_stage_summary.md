@@ -15,44 +15,40 @@ The working pipeline has three model levels:
 3. Density-aware: the fundus-derived vessel-density map affects branch depth,
    branch direction, and branch survival.
 
-The density-aware model is now implemented as separable mechanisms so the
-result pipeline can run ablation comparisons:
+The latest density-aware update refines branch direction selection. Candidate
+directions are now evaluated using endpoint density and short-horizon density
+sampled slightly beyond the endpoint. This helps the model prefer directions
+with better forward density support rather than only reacting to one local cell.
 
-- Density Depth Only
-- Density Direction Only
-- Density Survival Only
-- Full Density-Aware
-
-The latest selected full density-aware setting comes from a focused parameter
-search and prioritizes recovering spatial reach:
+The current selected full density-aware setting is:
 
 - alpha: `0.76`
-- max depth: `7`
-- initial length: `0.23`
-- density depth weight: `0.75`
-- density direction weight: `0.70`
-- density survival weight: `0.00`
+- max depth: `6`
+- initial length: `0.26`
+- density depth weight: `0.50`
+- density direction weight: `0.50`
+- density survival weight: `0.05`
+- density angle span: `1.50`
+- density horizon weight: `0.50`
 - global density weight: `0.60`
 
 ## Evaluation Priorities
 
-The next runs should focus on whether the full density-aware model preserves
-the coverage improvement reported in the May 2026 progress report without
-over-pruning the generated tree.
-
+The current model should be evaluated as a fundus-only constrained generator.
 The most important quantities are:
 
 - terminal count
 - total vessel length
 - occupied grid coverage
 - coverage dispersion
-- density correlation
 - terminal density score
+- matched terminal density score
+- density lift over random
 
-Coverage dispersion is the nearest-neighbor distance standard deviation among
-terminal nodes, where lower values indicate more uniform terminal spacing.
-Occupied grid coverage is a positive coverage metric, where higher values mean
-terminal nodes reach more of the retinal field.
+The latest full density-aware model averages `24.533` terminals and occupied
+grid coverage of `0.055` across 15 fundus images. Density lift over random is
+`-0.013`, which is close to the random-point baseline but still leaves room for
+better absolute density matching.
 
 ## How to Regenerate Results
 
@@ -67,11 +63,14 @@ The script writes:
 - `results/evaluation_results.csv`
 - `results/evaluation_summary.csv`
 - `results/ablation_summary.csv`
-- `results/latest_run_summary.md`
-- `results/parameter_search.csv`
-- `results/best_parameter_summary.md`
 - `figures/fig1_constraint_overlays.png`
 - `figures/fig2_model_comparison.png`
 - `figures/fig3_density_terminals.png`
 - `figures/fig4_evaluation_summary.png`
 - `figures/fig5_terminal_density_overlay.png`
+
+To rerun the parameter search:
+
+```bash
+python run_parameter_search.py
+```
