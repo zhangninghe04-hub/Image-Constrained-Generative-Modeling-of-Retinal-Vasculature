@@ -18,7 +18,7 @@ from src.generative_models.branching_model import (
 class DensityAwareBranchingTest(unittest.TestCase):
     def test_density_guided_angle_prefers_higher_density_endpoint(self):
         density = np.zeros((10, 10), dtype=float)
-        density[4, 7] = 1.0
+        density[3, 7] = 1.0
         config = TreeGeneratorConfig(
             density_map=density,
             density_weight=1.0,
@@ -33,6 +33,25 @@ class DensityAwareBranchingTest(unittest.TestCase):
         selected = gen._select_density_guided_angle(Node(0.0, 0.0, 0), 0.0, 0.5)
 
         self.assertGreater(selected, 0.0)
+
+    def test_density_horizon_score_looks_beyond_endpoint(self):
+        density = np.zeros((20, 20), dtype=float)
+        density[10, 12] = 0.2
+        density[10, 14] = 1.0
+        config = TreeGeneratorConfig(
+            density_map=density,
+            density_weight=1.0,
+            density_depth_weight=0.0,
+            density_direction_weight=1.0,
+            density_survival_weight=0.0,
+        )
+        gen = ConstrainedTreeGenerator(config)
+
+        score = gen._density_horizon_score(
+            Node(0.0, 0.0, 0), angle=0.0, length=0.25, endpoint_density=0.2
+        )
+
+        self.assertGreater(score, 0.2)
 
     def test_density_survival_probability_is_higher_in_dense_regions(self):
         density = np.zeros((10, 10), dtype=float)
