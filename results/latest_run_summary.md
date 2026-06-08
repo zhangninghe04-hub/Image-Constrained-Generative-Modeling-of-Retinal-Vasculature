@@ -1,73 +1,68 @@
 # Latest Run Summary
 
-Generated on 2026-06-05 from the 15 fundus images in `data/raw/healthy/`.
+Generated on 2026-06-08 from the 15 fundus images in `data/raw/healthy/`.
 
 ## Main Update
 
-This run focuses on recovering spatial reach in the fundus-constrained and
-density-aware models while keeping density-aware terminal placement active.
-OCTA data are still unavailable, so the project remains fundus-only.
+This run continues the fundus-only modeling stage because OCTA images are not
+yet available. The update refines the density-aware direction rule by sampling
+fundus-derived vessel density both at the candidate branch endpoint and along a
+short forward horizon. The parameter search was also adjusted to preserve the
+target terminal-count range instead of selecting overly dense trees.
 
 The update adds:
 
-- `run_parameter_search.py`
-- `results/parameter_search.csv`
-- `results/best_parameter_summary.md`
-- matched terminal-count density metrics
-- `figures/fig5_terminal_density_overlay.png`
+- short-horizon density-guided direction selection
+- `density_angle_span` and `density_horizon_weight` configuration parameters
+- a focused 288-combination parameter search
+- updated evaluation CSV files and figures
+- tests for the density horizon behavior
 
 ## Selected Parameters
 
-The focused parameter search tested 96 combinations. The selected full
+The focused parameter search tested 288 combinations. The selected full
 density-aware setting is:
 
 - alpha: `0.76`
-- max_depth: `7`
-- initial_length: `0.23`
+- max_depth: `6`
+- initial_length: `0.26`
 - global density weight: `0.60`
-- density depth weight: `0.75`
-- density direction weight: `0.70`
-- density survival weight: `0.00`
+- density depth weight: `0.50`
+- density direction weight: `0.50`
+- density survival weight: `0.05`
+- density angle span: `1.50`
+- density horizon weight: `0.50`
 
-This setting prioritizes recovering terminal count and occupied grid coverage.
+This setting keeps the full density-aware model near the intended terminal-count
+range while improving the density-lift metric relative to the previous run.
 
 ## 15-Image Average Metrics
 
 | model | terminals | length | occupied grid coverage | coverage dispersion | terminal density score | matched density score | density lift vs random |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Baseline | 29.000 | 4.234 | 0.057 | 0.010 | 0.277 | 0.284 | -0.015 |
-| Constrained | 22.200 | 3.645 | 0.039 | 0.077 | 0.157 | 0.158 | -0.148 |
-| Density Depth Only | 18.867 | 3.186 | 0.033 | 0.047 | 0.176 | 0.177 | -0.136 |
-| Density Direction Only | 20.733 | 3.551 | 0.037 | 0.051 | 0.187 | 0.188 | -0.126 |
-| Density Survival Only | 16.267 | 2.899 | 0.030 | 0.058 | 0.176 | 0.176 | -0.137 |
-| Density-Aware | 20.733 | 3.551 | 0.037 | 0.051 | 0.187 | 0.188 | -0.126 |
+| Baseline | 29.000 | 4.234 | 0.057 | 0.010 | 0.327 | 0.324 | 0.157 |
+| Constrained | 24.400 | 5.466 | 0.055 | 0.075 | 0.134 | 0.130 | -0.032 |
+| Density Depth Only | 25.400 | 5.687 | 0.056 | 0.049 | 0.127 | 0.122 | -0.042 |
+| Density Direction Only | 26.200 | 5.814 | 0.057 | 0.079 | 0.152 | 0.150 | -0.012 |
+| Density Survival Only | 22.667 | 5.268 | 0.050 | 0.052 | 0.121 | 0.119 | -0.046 |
+| Density-Aware | 24.533 | 5.589 | 0.055 | 0.076 | 0.152 | 0.150 | -0.013 |
 
 ## Interpretation
 
-The previous calibrated density-aware model averaged `14.867` terminals and
-occupied grid coverage of `0.027`. The new selected setting increases the full
-density-aware model to `20.733` terminals and occupied grid coverage of `0.037`.
-This directly addresses the prior weakness that constrained models were too
-spatially limited.
+The previous full density-aware run averaged `20.733` terminals and occupied
+grid coverage of `0.037`. The updated model averages `24.533` terminals and
+occupied grid coverage of `0.055`, which gives broader retinal reach while
+remaining near the target terminal-count range.
 
-The tradeoff is that terminal density score decreases from the previous
-full density-aware value of `0.217` to `0.187`. This means the model now reaches
-more of the retinal field, but the terminal distribution is less concentrated in
-the highest-density regions. This is a useful tradeoff to document because the
-project is now balancing two goals: spatial reach and density matching.
-
-The matched terminal-count density score was added to make density comparison
-fairer across models with different terminal counts. Density lift over random is
-still negative for all models, which shows that the current density map and
-terminal placement metric need further refinement.
+The matched density score is `0.150`, and density lift over random is `-0.013`.
+This is close to the random-point baseline and improves the relative density
+placement behavior compared with the previous clearly negative lift value. The
+absolute terminal density score still remains below the baseline model, so the
+fundus-only density objective is not fully solved.
 
 ## Next Priority
 
-The next modeling step should improve density matching under the recovered
-terminal count. In practical terms, the model should keep approximately
-`20-25` terminals while increasing matched terminal density score and density
-lift over random.
-
-The most promising next direction is to improve the direction-selection rule
-and terminal placement objective, rather than increasing branch survival
-pruning again.
+The next modeling step should improve absolute terminal placement in
+fundus-derived high-density regions while preserving the current terminal count
+and spatial coverage. A useful next direction is to improve the density map or
+terminal placement objective before adding OCTA-based constraints.
