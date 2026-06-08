@@ -52,16 +52,16 @@ EVALUATION_IMAGES = [
 
 DENSITY_WEIGHT = 0.6
 MODEL_ALPHA = 0.76
-MODEL_MAX_DEPTH = 7
-MODEL_INITIAL_LENGTH = 0.23
+MODEL_MAX_DEPTH = 6
+MODEL_INITIAL_LENGTH = 0.26
 MATCHED_SAMPLE_SIZE = 12
 MODEL_SPECS = [
-    {"label": "Baseline", "class": RetinalTreeGenerator, "from_constraints": False, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0},
-    {"label": "Constrained", "class": RetinalTreeGenerator, "from_constraints": True, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0},
-    {"label": "Density Depth Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.75, "direction": 0.0, "survival": 0.0},
-    {"label": "Density Direction Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.70, "survival": 0.0},
-    {"label": "Density Survival Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.0, "survival": 0.05},
-    {"label": "Density-Aware", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.75, "direction": 0.70, "survival": 0.0},
+    {"label": "Baseline", "class": RetinalTreeGenerator, "from_constraints": False, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0, "angle_span": 1.0, "horizon": 0.0},
+    {"label": "Constrained", "class": RetinalTreeGenerator, "from_constraints": True, "density_weight": 0.0, "depth": 0.0, "direction": 0.0, "survival": 0.0, "angle_span": 1.0, "horizon": 0.0},
+    {"label": "Density Depth Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.50, "direction": 0.0, "survival": 0.0, "angle_span": 1.0, "horizon": 0.0},
+    {"label": "Density Direction Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.50, "survival": 0.0, "angle_span": 1.5, "horizon": 0.5},
+    {"label": "Density Survival Only", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.0, "direction": 0.0, "survival": 0.05, "angle_span": 1.0, "horizon": 0.0},
+    {"label": "Density-Aware", "class": ConstrainedTreeGenerator, "from_constraints": True, "density_weight": DENSITY_WEIGHT, "depth": 0.50, "direction": 0.50, "survival": 0.05, "angle_span": 1.5, "horizon": 0.5},
 ]
 
 MODEL_ORDER = [spec["label"] for spec in MODEL_SPECS]
@@ -83,6 +83,8 @@ def build_generator(spec, constraints=None):
             density_depth_weight=spec["depth"],
             density_direction_weight=spec["direction"],
             density_survival_weight=spec["survival"],
+            density_angle_span=spec["angle_span"],
+            density_horizon_weight=spec["horizon"],
             random_seed=42,
         )
     else:
