@@ -39,13 +39,15 @@ PARAMETER_SEARCH_PATH = "results/parameter_search.csv"
 BEST_PARAMETER_SUMMARY_PATH = "results/best_parameter_summary.md"
 
 SEARCH_GRID = {
-    "alpha": [0.76, 0.80],
+    "alpha": [0.76],
     "max_depth": [6, 7],
     "initial_length": [0.23, 0.26],
     "density_weight": [0.60],
     "density_depth_weight": [0.50, 0.75],
-    "density_direction_weight": [0.30, 0.50, 0.70],
+    "density_direction_weight": [0.50, 0.70, 0.90],
     "density_survival_weight": [0.00, 0.05],
+    "density_angle_span": [1.0, 1.5],
+    "density_horizon_weight": [0.0, 0.5, 1.0],
 }
 
 TARGET_TERMINALS = 22.0
@@ -74,6 +76,8 @@ def generate_density_model(params, constraints):
         density_depth_weight=params["density_depth_weight"],
         density_direction_weight=params["density_direction_weight"],
         density_survival_weight=params["density_survival_weight"],
+        density_angle_span=params["density_angle_span"],
+        density_horizon_weight=params["density_horizon_weight"],
         random_seed=42,
     )
     gen = ConstrainedTreeGenerator(cfg)
@@ -112,14 +116,16 @@ def evaluate_params(params, all_constraints):
 def score_candidate(mean_metrics):
     terminals = mean_metrics["terminals"]
     terminal_penalty = abs(terminals - TARGET_TERMINALS) / TARGET_TERMINALS
-    sparse_penalty = max(0.0, 16.0 - terminals) / 16.0
+    sparse_penalty = max(0.0, 20.0 - terminals) / 20.0
+    dense_penalty = max(0.0, terminals - 25.0) / 25.0
     return (
         mean_metrics["occupied_grid_coverage"] * 3.0
         + mean_metrics["matched_terminal_density_score"] * 1.5
         + mean_metrics["density_lift_over_random"] * 2.0
         - mean_metrics["coverage_dispersion"] * 0.6
-        - terminal_penalty * 0.25
-        - sparse_penalty * 0.5
+        - terminal_penalty * 0.45
+        - sparse_penalty * 0.9
+        - dense_penalty * 1.1
     )
 
 
@@ -163,6 +169,8 @@ def main():
         f"- density_depth_weight: `{best['density_depth_weight']:.2f}`\n"
         f"- density_direction_weight: `{best['density_direction_weight']:.2f}`\n"
         f"- density_survival_weight: `{best['density_survival_weight']:.2f}`\n\n"
+        f"- density_angle_span: `{best['density_angle_span']:.2f}`\n"
+        f"- density_horizon_weight: `{best['density_horizon_weight']:.2f}`\n\n"
         "## Mean Metrics\n\n"
         f"- terminals: `{best['terminals']:.3f}`\n"
         f"- length: `{best['length']:.3f}`\n"
