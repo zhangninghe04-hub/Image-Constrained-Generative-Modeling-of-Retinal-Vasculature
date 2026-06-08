@@ -40,6 +40,9 @@ class RunResultsConfigurationTest(unittest.TestCase):
         self.assertIn("fig5_terminal_density_overlay.png", run_results)
         self.assertIn("matched_terminal_density_score", run_results)
         self.assertIn("density_lift_over_random", run_results)
+        self.assertIn("density_angle_span", search)
+        self.assertIn("density_horizon_weight", search)
+        self.assertIn("horizon", run_results)
         self.assertIn("results/parameter_search.csv", search)
         self.assertIn("results/best_parameter_summary.md", search)
 
