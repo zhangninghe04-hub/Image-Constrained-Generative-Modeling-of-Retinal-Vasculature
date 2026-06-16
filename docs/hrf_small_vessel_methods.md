@@ -48,7 +48,7 @@ run without resizing for selected full-resolution validation cases.
 
 ## Compared Methods
 
-Three lightweight image-processing methods are compared:
+Four lightweight image-processing methods are compared:
 
 1. `baseline`: green-channel enhancement, local contrast enhancement,
    background subtraction, thresholding, and post-processing.
@@ -56,6 +56,9 @@ Three lightweight image-processing methods are compared:
    thin vessel-like structures.
 3. `connected_recovery`: baseline plus a more permissive recovery of
    vesselness responses connected to the existing vessel mask.
+4. `clean_recovery`: a more conservative recovery rule that only keeps
+   vesselness components connected to existing vessels and supported by a
+   stronger line response.
 
 These methods are used as interpretable baselines before introducing a more
 complex learning-based segmentation model.
@@ -76,6 +79,7 @@ Small-vessel and skeleton-related metrics:
 - endpoint recall
 - missed endpoint count
 - skeleton overlap
+- pruned skeleton overlap
 - predicted skeleton component count
 
 These metrics are more relevant to the current modeling problem than whole-mask
@@ -86,17 +90,23 @@ skeleton connectivity.
 
 The preliminary HRF benchmark gives the following method-level averages:
 
-| Method | Dice | Sensitivity | Precision | Terminal Sensitivity | Endpoint Recall | Missed Endpoints | Skeleton Overlap |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| baseline | 0.529 | 0.867 | 0.385 | 0.650 | 0.821 | 96.489 | 0.361 |
-| multiscale_line | 0.530 | 0.878 | 0.384 | 0.656 | 0.817 | 98.444 | 0.365 |
-| connected_recovery | 0.519 | 0.898 | 0.369 | 0.673 | 0.808 | 103.556 | 0.361 |
+| Method | Dice | Sensitivity | Precision | Terminal Sensitivity | Endpoint Recall | Missed Endpoints | Skeleton Overlap | Pruned Skeleton Overlap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 0.529 | 0.867 | 0.385 | 0.650 | 0.821 | 96.489 | 0.361 | 0.342 |
+| multiscale_line | 0.530 | 0.878 | 0.384 | 0.656 | 0.817 | 98.444 | 0.365 | 0.350 |
+| clean_recovery | 0.529 | 0.886 | 0.381 | 0.660 | 0.816 | 99.333 | 0.363 | 0.348 |
+| connected_recovery | 0.519 | 0.898 | 0.369 | 0.673 | 0.808 | 103.556 | 0.361 | 0.350 |
 
 ## Interpretation
 
 The `multiscale_line` method slightly improves Dice, terminal sensitivity, and
 skeleton overlap compared with the baseline. This suggests that multiscale
 thin-vessel enhancement is a useful direction for recovering small vessels.
+
+The `clean_recovery` method improves terminal sensitivity and pruned skeleton
+overlap while keeping the precision drop smaller than the more aggressive
+`connected_recovery` method. This makes it a more useful next-step direction for
+retinal vascular modeling, where cleaner skeleton connectivity matters.
 
 The `connected_recovery` method gives the highest terminal sensitivity, but it
 reduces precision and endpoint recall. This indicates that simply adding more
@@ -115,7 +125,7 @@ The next implementation step should refine the small-vessel recovery rule by:
 - preserving thin branches connected to plausible vessel structures
 - suppressing isolated false-positive line responses
 - pruning skeleton spurs after segmentation
-- evaluating thin-vessel and terminal-vessel errors separately
+- evaluating terminal-vessel errors and skeleton connectivity
 - checking whether improved masks produce more reliable skeleton connectivity
 
 This keeps the work aligned with retinal vascular modeling rather than a
