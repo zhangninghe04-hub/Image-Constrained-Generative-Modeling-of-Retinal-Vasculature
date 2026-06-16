@@ -157,7 +157,36 @@ def segment_connected_recovery_from_maps(
     return pred
 
 
-METHOD_NAMES = ["baseline", "multiscale_line", "connected_recovery"]
+def segment_clean_recovery_from_maps(
+    baseline: np.ndarray, vesselness: np.ndarray, fov: np.ndarray
+) -> np.ndarray:
+    vals = vesselness[fov]
+    if vals.size == 0:
+        return baseline
+
+    seed = (vesselness >= np.percentile(vals, 95.0)) & fov
+    candidates = (vesselness >= np.percentile(vals, 90.0)) & binary_dilation(
+        baseline, iterations=2
+    ) & fov
+    labeled, n_components = label(candidates)
+    anchor = binary_dilation(baseline, iterations=1)
+    clean = baseline.copy()
+
+    for component_id in range(1, n_components + 1):
+        component = labeled == component_id
+        size = int(component.sum())
+        if size < 12:
+            continue
+        if not (component & anchor).any():
+            continue
+        if not (component & seed).any():
+            continue
+        clean |= component
+
+    return remove_small_objects(clean.astype(bool), min_size=24)
+
+
+METHOD_NAMES = ["baseline", "multiscale_line", "connected_recovery", "clean_recovery"]
 
 
 def segment_all_methods(image: np.ndarray) -> dict[str, np.ndarray]:
@@ -167,6 +196,7 @@ def segment_all_methods(image: np.ndarray) -> dict[str, np.ndarray]:
         "baseline": baseline,
         "multiscale_line": segment_multiscale_line_from_maps(baseline, vesselness, fov),
         "connected_recovery": segment_connected_recovery_from_maps(baseline, vesselness, fov),
+        "clean_recovery": segment_clean_recovery_from_maps(baseline, vesselness, fov),
     }
 
 
@@ -179,6 +209,16 @@ def skeleton_endpoints(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             if dx or dy:
                 count += padded[1 + dy : 1 + dy + skel.shape[0], 1 + dx : 1 + dx + skel.shape[1]]
     return skel, skel & (count == 1)
+
+
+def prune_skeleton_spurs(skel: np.ndarray, iterations: int = 8) -> np.ndarray:
+    pruned = skel.copy()
+    for _ in range(iterations):
+        _, endpoints = skeleton_endpoints(pruned)
+        if not endpoints.any():
+            break
+        pruned = pruned & ~endpoints
+    return pruned
 
 
 def disk(radius: int) -> np.ndarray:
@@ -237,9 +277,14 @@ def endpoint_metrics(pred_end: np.ndarray, gt_end: np.ndarray, radius: int) -> d
 def component_metrics(pred: np.ndarray, gt: np.ndarray) -> dict[str, float]:
     pred_skel, _ = skeleton_endpoints(pred)
     gt_skel, _ = skeleton_endpoints(gt)
+    pred_pruned = prune_skeleton_spurs(pred_skel)
+    gt_pruned = prune_skeleton_spurs(gt_skel)
     pred_components, pred_count = label(pred_skel)
     gt_components, gt_count = label(gt_skel)
+    pred_pruned_components, pred_pruned_count = label(pred_pruned)
+    gt_pruned_components, gt_pruned_count = label(gt_pruned)
     overlap = pred_skel & gt_skel
+    pruned_overlap = pred_pruned & gt_pruned
     return {
         "pred_skeleton_pixels": int(pred_skel.sum()),
         "gt_skeleton_pixels": int(gt_skel.sum()),
@@ -247,6 +292,16 @@ def component_metrics(pred: np.ndarray, gt: np.ndarray) -> dict[str, float]:
         "pred_skeleton_components": int(pred_count),
         "gt_skeleton_components": int(gt_count),
         "component_ratio": safe_div(float(pred_count), float(gt_count)),
+        "pruned_pred_skeleton_pixels": int(pred_pruned.sum()),
+        "pruned_gt_skeleton_pixels": int(gt_pruned.sum()),
+        "pruned_skeleton_overlap": safe_div(
+            int(pruned_overlap.sum()), int(gt_pruned.sum())
+        ),
+        "pruned_pred_skeleton_components": int(pred_pruned_count),
+        "pruned_gt_skeleton_components": int(gt_pruned_count),
+        "pruned_component_ratio": safe_div(
+            float(pred_pruned_count), float(gt_pruned_count)
+        ),
     }
 
 
@@ -284,7 +339,7 @@ def make_method_chart(summary: pd.DataFrame, out: Path) -> None:
         ("dice", "Dice"),
         ("terminal_sensitivity", "Terminal sens."),
         ("endpoint_recall", "Endpoint recall"),
-        ("skeleton_overlap", "Skeleton overlap"),
+        ("pruned_skeleton_overlap", "Pruned skel. overlap"),
     ]
     methods = summary["method"].tolist()
     colors = [(80, 130, 210), (235, 150, 65), (90, 170, 110), (160, 105, 200)]
@@ -393,7 +448,8 @@ def main() -> None:
     cols = [
         "method", "dice", "sensitivity", "precision", "terminal_sensitivity",
         "endpoint_recall", "missed_endpoint_count", "skeleton_overlap",
-        "pred_skeleton_components",
+        "pruned_skeleton_overlap", "pred_skeleton_components",
+        "pruned_pred_skeleton_components",
     ]
     print(summary[cols].round(3).to_string(index=False))
     print(f"Saved {metrics_path}")
