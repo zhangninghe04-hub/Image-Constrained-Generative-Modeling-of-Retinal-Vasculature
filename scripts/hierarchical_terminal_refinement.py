@@ -64,6 +64,18 @@ class BranchGraphParams:
 
 
 @dataclass(frozen=True)
+class SoftGraphScoreParams:
+    anchor_radius: int = 10
+    endpoint_radius: int = 44
+    min_area: int = 12
+    min_mean_vesselness: float = 0.04
+    min_max_vesselness: float = 0.18
+    terminal_score_threshold: float = 1.95
+    nonterminal_score_threshold: float = 2.45
+    direction_penalty_threshold: float = -0.55
+
+
+@dataclass(frozen=True)
 class BranchFeature:
     length: int
     start_y: int
@@ -592,6 +604,91 @@ def branch_graph_refinement(
     return remove_small_objects(refined.astype(bool), min_size=12), counts
 
 
+def soft_graph_score_refinement(
+    raw: np.ndarray,
+    baseline: np.ndarray,
+    vesselness: np.ndarray,
+    baseline_skel: np.ndarray,
+    baseline_endpoints: np.ndarray,
+    params: SoftGraphScoreParams,
+) -> tuple[np.ndarray, dict[str, int]]:
+    main_vessel = remove_small_objects(baseline.astype(bool), min_size=24)
+    refined = main_vessel.copy()
+    anchor_zone = binary_dilation(main_vessel, iterations=params.anchor_radius)
+    endpoint_zone = binary_dilation(baseline_endpoints, structure=disk(params.endpoint_radius))
+    endpoint_coords, endpoint_vectors = endpoint_direction_map(baseline_skel, baseline_endpoints)
+    labeled, n_components = label(raw & ~main_vessel)
+    objects = find_objects(labeled)
+    counts = {
+        "kept_terminal_components": 0,
+        "kept_nonterminal_components": 0,
+        "removed_far_components": 0,
+        "removed_weak_components": 0,
+        "removed_direction_components": 0,
+        "removed_short_components": 0,
+        "soft_graph_scored_components": 0,
+    }
+
+    for component_id in range(1, n_components + 1):
+        bbox = objects[component_id - 1]
+        if bbox is None:
+            continue
+        component = labeled[bbox] == component_id
+        area = int(component.sum())
+        if area < params.min_area:
+            counts["removed_short_components"] += 1
+            continue
+
+        touches_anchor = bool((component & anchor_zone[bbox]).any())
+        touches_endpoint = bool((component & endpoint_zone[bbox]).any())
+        if not touches_anchor and not touches_endpoint:
+            counts["removed_far_components"] += 1
+            continue
+
+        comp_vals = vesselness[bbox][component]
+        mean_v = float(comp_vals.mean()) if comp_vals.size else 0.0
+        max_v = float(comp_vals.max()) if comp_vals.size else 0.0
+        if max_v < params.min_max_vesselness and mean_v < params.min_mean_vesselness:
+            counts["removed_weak_components"] += 1
+            continue
+
+        component_skel = skeletonize(component)
+        stats = branch_graph_stats(component, bbox, endpoint_coords, endpoint_vectors, component_skel)
+        branch_len = stats["longest_branch_length"]
+        direction_cos = stats["branch_direction_cosine"]
+        counts["soft_graph_scored_components"] += 1
+
+        support_score = 0.0
+        support_score += 0.95 if touches_endpoint else 0.0
+        support_score += 0.65 if touches_anchor else 0.0
+        vessel_score = 0.65 * min(max_v / 0.24, 1.0) + 0.35 * min(mean_v / 0.12, 1.0)
+        size_score = 0.45 * min(area / 90.0, 1.0)
+        branch_score = 0.45 * min(branch_len / 18.0, 1.0)
+        direction_score = 0.35 * max(0.0, (direction_cos + 1.0) / 2.0)
+        score = support_score + vessel_score + size_score + branch_score + direction_score
+
+        terminal_candidate = touches_endpoint
+        threshold = params.terminal_score_threshold if terminal_candidate else params.nonterminal_score_threshold
+        if direction_cos < params.direction_penalty_threshold and branch_len < 18:
+            score -= 0.35
+
+        if score >= threshold:
+            recovered_component = component & binary_dilation(component_skel, iterations=2)
+            refined[bbox] |= recovered_component
+            if terminal_candidate:
+                counts["kept_terminal_components"] += 1
+            else:
+                counts["kept_nonterminal_components"] += 1
+        elif direction_cos < params.direction_penalty_threshold:
+            counts["removed_direction_components"] += 1
+        elif branch_len < 6:
+            counts["removed_short_components"] += 1
+        else:
+            counts["removed_weak_components"] += 1
+
+    return remove_small_objects(refined.astype(bool), min_size=12), counts
+
+
 def evaluate_row(
     image: str,
     method: str,
@@ -651,6 +748,7 @@ def make_summary_figure(summary: pd.DataFrame, out: Path) -> None:
         "soft_structure_refined",
         "hierarchical_terminal_refined",
         "branch_graph_refined",
+        "soft_graph_score_refined",
     ]
     metrics = [
         ("dice", "Dice"),
@@ -660,11 +758,11 @@ def make_summary_figure(summary: pd.DataFrame, out: Path) -> None:
         ("terminal_skeleton_distance_f1_radius_5", "Terminal skel. F1"),
     ]
     rows = summary.set_index("method").loc[order].reset_index()
-    w, h = 1850, 780
+    w, h = 2050, 780
     img = Image.new("RGB", (w, h), "white")
     draw = ImageDraw.Draw(img)
     draw.text((36, 26), "Hierarchical terminal refinement with skeleton-distance evaluation", fill=(20, 20, 20))
-    x0, y0, cw, ch = 90, 112, 1650, 450
+    x0, y0, cw, ch = 90, 112, 1850, 450
     colors = [(64, 132, 214), (232, 144, 58), (151, 99, 205), (88, 168, 190), (80, 170, 110)]
     for t in np.linspace(0, 1, 6):
         y = y0 + ch - int(t * ch)
@@ -713,20 +811,20 @@ def overlay_panel(image: np.ndarray, mask: np.ndarray, gt: np.ndarray, size: int
 
 def make_example_figure(cases: list[dict[str, object]], per_image: pd.DataFrame, out: Path) -> None:
     chosen = (
-        per_image[per_image["method"] == "branch_graph_refined"]
+        per_image[per_image["method"] == "soft_graph_score_refined"]
         .assign(balance=lambda d: d["terminal_sensitivity"] + 0.3 * d["precision"] - 0.1 * d["fp_over_gt_area"])
         .sort_values("balance", ascending=False)
         .head(3)["image"]
         .tolist()
     )
     case_map = {case["name"]: case for case in cases}
-    labels = ["Original", "GT", "Connected raw", "Branch graph", "Recovered candidates", "FN after refine"]
+    labels = ["Original", "GT", "Connected raw", "Soft graph score", "Recovered candidates", "FN after refine"]
     size = 245
     rows = []
-    params = BranchGraphParams()
+    params = SoftGraphScoreParams()
     for name in chosen:
         case = case_map[name]
-        refined, _ = branch_graph_refinement(
+        refined, _ = soft_graph_score_refinement(
             case["connected_raw"],
             case["baseline"],
             case["vesselness"],
@@ -753,7 +851,7 @@ def make_example_figure(cases: list[dict[str, object]], per_image: pd.DataFrame,
         rows.append(row)
     canvas = Image.new("RGB", (size * len(labels), 42 + sum(r.height for r in rows) + 12 * (len(rows) - 1)), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((0, 10), "Branch-level skeleton graph refinement examples", fill=(20, 20, 20))
+    draw.text((0, 10), "Soft graph-score terminal refinement examples", fill=(20, 20, 20))
     y = 42
     for row in rows:
         canvas.paste(row, (0, y))
@@ -777,6 +875,7 @@ def main() -> None:
     soft_params = SoftParams()
     hierarchical_params = HierarchicalParams()
     branch_graph_params = BranchGraphParams()
+    soft_graph_score_params = SoftGraphScoreParams()
 
     rows = []
     for idx, case in enumerate(cases, start=1):
@@ -833,6 +932,24 @@ def main() -> None:
                 case["gt"],
                 case["term_gt"],
                 branch_graph_counts,
+            )
+        )
+        soft_graph_score, soft_graph_score_counts = soft_graph_score_refinement(
+            case["connected_raw"],
+            case["baseline"],
+            case["vesselness"],
+            case["baseline_skel"],
+            case["baseline_endpoints"],
+            soft_graph_score_params,
+        )
+        rows.append(
+            evaluate_row(
+                case["name"],
+                "soft_graph_score_refined",
+                soft_graph_score,
+                case["gt"],
+                case["term_gt"],
+                soft_graph_score_counts,
             )
         )
 

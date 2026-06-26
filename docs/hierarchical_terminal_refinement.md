@@ -36,6 +36,16 @@ A second branch-graph refinement was also tested. This method focuses on endpoin
 
 This branch-graph step is more structurally selective than the previous soft refinement, but it is currently conservative.
 
+The latest update integrates the same branch-level and direction-continuity information back into the softer refinement logic. Instead of using branch graph as an independent hard filter, `soft_graph_score_refined` assigns each candidate a soft score based on:
+
+- proximity to baseline vessels and endpoint regions;
+- vesselness strength;
+- candidate size;
+- skeleton branch length;
+- direction consistency with nearby baseline endpoints.
+
+Candidates with sufficient score are recovered in a skeleton-guided way, so the method adds vessel pixels around the retained skeleton instead of restoring the whole connected component.
+
 ## Quantitative Summary
 
 | Method | Dice | Sensitivity | Precision | Terminal Sensitivity | FP / GT Area | FN / GT Area | Skeleton F1 r=5 | Terminal Skeleton F1 r=5 |
@@ -45,6 +55,7 @@ This branch-graph step is more structurally selective than the previous soft ref
 | connected_recovery_raw | 0.532 | 0.902 | 0.382 | 0.684 | 1.578 | 0.098 | 0.723 | 0.899 |
 | soft_structure_refined | 0.545 | 0.886 | 0.399 | 0.673 | 1.449 | 0.114 | 0.720 | 0.897 |
 | hierarchical_terminal_refined | 0.545 | 0.881 | 0.400 | 0.670 | 1.433 | 0.119 | 0.721 | 0.897 |
+| soft_graph_score_refined | 0.541 | 0.888 | 0.394 | 0.675 | 1.483 | 0.112 | 0.722 | 0.898 |
 
 ## Interpretation
 
@@ -56,6 +67,10 @@ This result supports the direction of hierarchical refinement, but also shows th
 
 The branch-graph refinement confirms that branch-level skeleton features and direction continuity can be implemented, but using them as hard filters does not improve the current quantitative result. The method remains close to `baseline_raw`, with Dice 0.549 and terminal sensitivity 0.668. This suggests that branch graph and direction continuity should be used as soft scoring terms inside the existing soft or hierarchical recovery method, rather than as a separate strict terminal filter.
 
+The integrated `soft_graph_score_refined` result improves terminal-vessel recovery compared with `soft_structure_refined`. Terminal sensitivity increases from 0.673 to 0.675, terminal skeleton F1 increases from 0.897 to 0.898, and overall sensitivity increases from 0.886 to 0.888. This indicates that the branch-level and direction-continuity terms help recover additional terminal structures.
+
+However, the current score still admits extra false positives. FP / GT area increases from 1.449 to 1.483, and precision decreases from 0.399 to 0.394. This means the method moves in the intended small-vessel recovery direction, but the FP control is not yet sufficient.
+
 ## Next Step
 
 The next refinement should focus on:
@@ -63,5 +78,7 @@ The next refinement should focus on:
 - adjusting terminal-region parameters separately from main-vessel parameters;
 - improving branch-level direction continuity;
 - converting branch graph features from hard filtering rules into soft candidate scores;
+- improving the soft score so that direction and branch continuity reduce false-positive candidates more strongly;
+- adding local background/noise suppression before terminal candidate recovery;
 - using skeleton-distance metrics as a more prominent tuning target;
 - reducing false positives without causing a hard-filter-like drop in terminal sensitivity.
