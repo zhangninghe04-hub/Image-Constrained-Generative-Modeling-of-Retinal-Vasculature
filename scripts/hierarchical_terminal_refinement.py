@@ -76,6 +76,22 @@ class SoftGraphScoreParams:
 
 
 @dataclass(frozen=True)
+class TreeIterativeParams:
+    layers: int = 3
+    layer_radius_step: int = 12
+    bridge_radius: int = 5
+    min_area: int = 10
+    min_branch_length: int = 7
+    strong_branch_length: int = 16
+    min_mean_vesselness: float = 0.04
+    min_max_vesselness: float = 0.16
+    min_dark_contrast: float = 0.016
+    terminal_score_threshold: float = 2.15
+    nonterminal_score_threshold: float = 2.55
+    recovery_radius: int = 2
+
+
+@dataclass(frozen=True)
 class BranchFeature:
     length: int
     start_y: int
@@ -381,6 +397,36 @@ def branch_graph_stats(
         "mean_branch_length": safe_div(length, branch_count),
         "branch_direction_cosine": direction_score,
     }
+
+
+def local_dark_line_features(image: np.ndarray, component: np.ndarray) -> tuple[float, float]:
+    green = image[:, :, 1].astype(float) / 255.0
+    component = component.astype(bool)
+    if not component.any():
+        return 0.0, 0.0
+    near = binary_dilation(component, structure=disk(2))
+    ring = binary_dilation(component, structure=disk(7)) & ~near
+    if not ring.any():
+        ring = ~component
+    vessel_mean = float(green[component].mean())
+    background_mean = float(green[ring].mean()) if ring.any() else vessel_mean
+    contrast = background_mean - vessel_mean
+    dark_score = max(0.0, contrast)
+    return dark_score, vessel_mean
+
+
+def expand_bbox(bbox: tuple[slice, slice], shape: tuple[int, int], pad: int) -> tuple[slice, slice]:
+    y0 = max(0, bbox[0].start - pad)
+    y1 = min(shape[0], bbox[0].stop + pad)
+    x0 = max(0, bbox[1].start - pad)
+    x1 = min(shape[1], bbox[1].stop + pad)
+    return slice(y0, y1), slice(x0, x1)
+
+
+def paste_local(local: np.ndarray, bbox: tuple[slice, slice], shape: tuple[int, int]) -> np.ndarray:
+    out = np.zeros(shape, dtype=bool)
+    out[bbox] = local
+    return out
 
 
 def soft_refinement(
@@ -689,6 +735,105 @@ def soft_graph_score_refinement(
     return remove_small_objects(refined.astype(bool), min_size=12), counts
 
 
+def tree_iterative_refinement(
+    raw: np.ndarray,
+    baseline: np.ndarray,
+    vesselness: np.ndarray,
+    image: np.ndarray,
+    params: TreeIterativeParams,
+) -> tuple[np.ndarray, dict[str, int]]:
+    refined = remove_small_objects(baseline.astype(bool), min_size=24)
+    candidate_pool = (raw & ~refined) & (vesselness >= params.min_mean_vesselness)
+    counts = {
+        "iterative_layers": params.layers,
+        "tree_connected_components": 0,
+        "kept_terminal_components": 0,
+        "kept_nonterminal_components": 0,
+        "removed_far_components": 0,
+        "removed_weak_components": 0,
+        "removed_short_components": 0,
+        "removed_low_contrast_components": 0,
+    }
+
+    for layer_idx in range(params.layers):
+        current_skel, current_endpoints = skeleton_endpoints(refined)
+        endpoint_zone = binary_dilation(current_endpoints, structure=disk(params.layer_radius_step * (layer_idx + 1)))
+        tree_zone = binary_dilation(refined, iterations=params.bridge_radius + layer_idx * 2)
+        search_zone = endpoint_zone | tree_zone
+        layer_candidates = candidate_pool & search_zone
+        labeled, n_components = label(layer_candidates)
+        objects = find_objects(labeled)
+        if n_components == 0:
+            continue
+        endpoint_coords, endpoint_vectors = endpoint_direction_map(current_skel, current_endpoints)
+        layer_kept = np.zeros_like(refined, dtype=bool)
+
+        for component_id in range(1, n_components + 1):
+            bbox = objects[component_id - 1]
+            if bbox is None:
+                continue
+            component = labeled[bbox] == component_id
+            area = int(component.sum())
+            if area < params.min_area:
+                counts["removed_short_components"] += 1
+                continue
+
+            bridge_bbox = expand_bbox(bbox, refined.shape, params.bridge_radius)
+            local_component = np.zeros((bridge_bbox[0].stop - bridge_bbox[0].start, bridge_bbox[1].stop - bridge_bbox[1].start), dtype=bool)
+            y_offset = bbox[0].start - bridge_bbox[0].start
+            x_offset = bbox[1].start - bridge_bbox[1].start
+            local_component[y_offset : y_offset + component.shape[0], x_offset : x_offset + component.shape[1]] = component
+            connected_to_tree = bool((binary_dilation(local_component, iterations=params.bridge_radius) & refined[bridge_bbox]).any())
+            if not connected_to_tree:
+                counts["removed_far_components"] += 1
+                continue
+
+            component_skel = skeletonize(component)
+            branch_stats = branch_graph_stats(component, bbox, endpoint_coords, endpoint_vectors, component_skel)
+            branch_len = branch_stats["longest_branch_length"]
+            direction_cos = branch_stats["branch_direction_cosine"]
+            touches_endpoint = bool((component & endpoint_zone[bbox]).any())
+            comp_vals = vesselness[bbox][component]
+            mean_v = float(comp_vals.mean()) if comp_vals.size else 0.0
+            max_v = float(comp_vals.max()) if comp_vals.size else 0.0
+            dark_contrast, vessel_mean = local_dark_line_features(image[bbox], component)
+            counts["tree_connected_components"] += 1
+
+            if branch_len < params.min_branch_length and dark_contrast < params.min_dark_contrast:
+                counts["removed_short_components"] += 1
+                continue
+            if max_v < params.min_max_vesselness and dark_contrast < params.min_dark_contrast:
+                counts["removed_low_contrast_components"] += 1
+                continue
+
+            connection_score = 0.85
+            terminal_score = 0.80 if touches_endpoint else 0.0
+            vessel_score = 0.55 * min(max_v / 0.24, 1.0) + 0.30 * min(mean_v / 0.12, 1.0)
+            contrast_score = 0.55 * min(max(dark_contrast, 0.0) / 0.05, 1.0)
+            branch_score = 0.45 * min(branch_len / params.strong_branch_length, 1.0)
+            direction_score = 0.25 * max(0.0, (direction_cos + 1.0) / 2.0)
+            layer_penalty = 0.08 * layer_idx
+            score = connection_score + terminal_score + vessel_score + contrast_score + branch_score + direction_score - layer_penalty
+            threshold = params.terminal_score_threshold if touches_endpoint else params.nonterminal_score_threshold
+
+            if score >= threshold:
+                recovered = component & binary_dilation(component_skel, iterations=params.recovery_radius)
+                layer_kept[bbox] |= recovered
+                if touches_endpoint:
+                    counts["kept_terminal_components"] += 1
+                else:
+                    counts["kept_nonterminal_components"] += 1
+            else:
+                counts["removed_weak_components"] += 1
+
+        if not layer_kept.any():
+            continue
+        refined |= layer_kept
+        candidate_pool &= ~binary_dilation(layer_kept, iterations=1)
+
+    return remove_small_objects(refined.astype(bool), min_size=12), counts
+
+
 def evaluate_row(
     image: str,
     method: str,
@@ -749,6 +894,7 @@ def make_summary_figure(summary: pd.DataFrame, out: Path) -> None:
         "hierarchical_terminal_refined",
         "branch_graph_refined",
         "soft_graph_score_refined",
+        "tree_iterative_refined",
     ]
     metrics = [
         ("dice", "Dice"),
@@ -758,11 +904,11 @@ def make_summary_figure(summary: pd.DataFrame, out: Path) -> None:
         ("terminal_skeleton_distance_f1_radius_5", "Terminal skel. F1"),
     ]
     rows = summary.set_index("method").loc[order].reset_index()
-    w, h = 2050, 780
+    w, h = 2250, 780
     img = Image.new("RGB", (w, h), "white")
     draw = ImageDraw.Draw(img)
     draw.text((36, 26), "Hierarchical terminal refinement with skeleton-distance evaluation", fill=(20, 20, 20))
-    x0, y0, cw, ch = 90, 112, 1850, 450
+    x0, y0, cw, ch = 90, 112, 2050, 450
     colors = [(64, 132, 214), (232, 144, 58), (151, 99, 205), (88, 168, 190), (80, 170, 110)]
     for t in np.linspace(0, 1, 6):
         y = y0 + ch - int(t * ch)
@@ -811,25 +957,24 @@ def overlay_panel(image: np.ndarray, mask: np.ndarray, gt: np.ndarray, size: int
 
 def make_example_figure(cases: list[dict[str, object]], per_image: pd.DataFrame, out: Path) -> None:
     chosen = (
-        per_image[per_image["method"] == "soft_graph_score_refined"]
+        per_image[per_image["method"] == "tree_iterative_refined"]
         .assign(balance=lambda d: d["terminal_sensitivity"] + 0.3 * d["precision"] - 0.1 * d["fp_over_gt_area"])
         .sort_values("balance", ascending=False)
         .head(3)["image"]
         .tolist()
     )
     case_map = {case["name"]: case for case in cases}
-    labels = ["Original", "GT", "Connected raw", "Soft graph score", "Recovered candidates", "FN after refine"]
+    labels = ["Original", "GT", "Connected raw", "Tree iterative", "Recovered candidates", "FN after refine"]
     size = 245
     rows = []
-    params = SoftGraphScoreParams()
+    params = TreeIterativeParams()
     for name in chosen:
         case = case_map[name]
-        refined, _ = soft_graph_score_refinement(
+        refined, _ = tree_iterative_refinement(
             case["connected_raw"],
             case["baseline"],
             case["vesselness"],
-            case["baseline_skel"],
-            case["baseline_endpoints"],
+            case["image"],
             params,
         )
         recovered = refined & ~case["baseline"]
@@ -851,7 +996,7 @@ def make_example_figure(cases: list[dict[str, object]], per_image: pd.DataFrame,
         rows.append(row)
     canvas = Image.new("RGB", (size * len(labels), 42 + sum(r.height for r in rows) + 12 * (len(rows) - 1)), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((0, 10), "Soft graph-score terminal refinement examples", fill=(20, 20, 20))
+    draw.text((0, 10), "Tree-connected iterative terminal refinement examples", fill=(20, 20, 20))
     y = 42
     for row in rows:
         canvas.paste(row, (0, y))
@@ -876,6 +1021,7 @@ def main() -> None:
     hierarchical_params = HierarchicalParams()
     branch_graph_params = BranchGraphParams()
     soft_graph_score_params = SoftGraphScoreParams()
+    tree_iterative_params = TreeIterativeParams()
 
     rows = []
     for idx, case in enumerate(cases, start=1):
@@ -950,6 +1096,23 @@ def main() -> None:
                 case["gt"],
                 case["term_gt"],
                 soft_graph_score_counts,
+            )
+        )
+        tree_iterative, tree_iterative_counts = tree_iterative_refinement(
+            case["connected_raw"],
+            case["baseline"],
+            case["vesselness"],
+            case["image"],
+            tree_iterative_params,
+        )
+        rows.append(
+            evaluate_row(
+                case["name"],
+                "tree_iterative_refined",
+                tree_iterative,
+                case["gt"],
+                case["term_gt"],
+                tree_iterative_counts,
             )
         )
 

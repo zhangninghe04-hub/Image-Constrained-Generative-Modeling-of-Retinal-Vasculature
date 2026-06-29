@@ -9,6 +9,8 @@ The previous soft refinement improved the balance between terminal-vessel preser
 - process vessels hierarchically by separating a stable main-vessel layer from terminal small-vessel candidates;
 - add branch-level skeleton graph features for candidate vessel filtering;
 - add direction-continuity checks near baseline endpoint regions;
+- add tree-connected iterative recovery and short-branch filtering;
+- use local dark-line contrast as an auxiliary false-positive control;
 - evaluate terminal structures with skeleton-distance metrics in addition to pixel-level overlap.
 
 The goal is not to replace ground-truth evaluation, but to make the analysis more suitable for small terminal vessels, where small spatial shifts can strongly affect pixel overlap.
@@ -46,6 +48,8 @@ The latest update integrates the same branch-level and direction-continuity info
 
 Candidates with sufficient score are recovered in a skeleton-guided way, so the method adds vessel pixels around the retained skeleton instead of restoring the whole connected component.
 
+The latest tree-connected iterative refinement follows the professor's suggested direction more closely. It starts from the stable baseline vessel tree, then recovers candidates outward in several local layers. Candidate branches are only considered when they can connect back to the current vessel tree within a short bridge radius. Very short branches are removed unless they have sufficient vesselness and local dark-line contrast. This makes the recovery more topology-aware than a global sensitivity increase.
+
 ## Quantitative Summary
 
 | Method | Dice | Sensitivity | Precision | Terminal Sensitivity | FP / GT Area | FN / GT Area | Skeleton F1 r=5 | Terminal Skeleton F1 r=5 |
@@ -56,6 +60,7 @@ Candidates with sufficient score are recovered in a skeleton-guided way, so the 
 | soft_structure_refined | 0.545 | 0.886 | 0.399 | 0.673 | 1.449 | 0.114 | 0.720 | 0.897 |
 | hierarchical_terminal_refined | 0.545 | 0.881 | 0.400 | 0.670 | 1.433 | 0.119 | 0.721 | 0.897 |
 | soft_graph_score_refined | 0.541 | 0.888 | 0.394 | 0.675 | 1.483 | 0.112 | 0.722 | 0.898 |
+| tree_iterative_refined | 0.542 | 0.887 | 0.396 | 0.674 | 1.471 | 0.113 | 0.721 | 0.897 |
 
 ## Interpretation
 
@@ -71,6 +76,8 @@ The integrated `soft_graph_score_refined` result improves terminal-vessel recove
 
 However, the current score still admits extra false positives. FP / GT area increases from 1.449 to 1.483, and precision decreases from 0.399 to 0.394. This means the method moves in the intended small-vessel recovery direction, but the FP control is not yet sufficient.
 
+The tree-connected iterative refinement reduces part of this false-positive increase while keeping the terminal-vessel gain. Compared with `soft_graph_score_refined`, FP / GT area decreases from 1.483 to 1.471 and precision increases from 0.394 to 0.396. Terminal sensitivity remains higher than the original soft refinement, increasing from 0.673 to 0.674. This suggests that enforcing main-tree connection and using local dark-line contrast helps make the recovery more controlled, although it still does not fully outperform `soft_structure_refined` in overall Dice or precision.
+
 ## Next Step
 
 The next refinement should focus on:
@@ -79,6 +86,8 @@ The next refinement should focus on:
 - improving branch-level direction continuity;
 - converting branch graph features from hard filtering rules into soft candidate scores;
 - improving the soft score so that direction and branch continuity reduce false-positive candidates more strongly;
-- adding local background/noise suppression before terminal candidate recovery;
+- strengthening main-tree connection validation with branch-level path continuity;
+- improving local background/noise suppression before terminal candidate recovery;
+- tuning iterative layer thresholds separately for central vessels and peripheral terminal vessels;
 - using skeleton-distance metrics as a more prominent tuning target;
 - reducing false positives without causing a hard-filter-like drop in terminal sensitivity.
