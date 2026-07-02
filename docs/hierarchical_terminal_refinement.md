@@ -50,6 +50,8 @@ Candidates with sufficient score are recovered in a skeleton-guided way, so the 
 
 The latest tree-connected iterative refinement follows the professor's suggested direction more closely. It starts from the stable baseline vessel tree, then recovers candidates outward in several local layers. Candidate branches are only considered when they can connect back to the current vessel tree within a short bridge radius. Very short branches are removed unless they have sufficient vesselness and local dark-line contrast. This makes the recovery more topology-aware than a global sensitivity increase.
 
+The newest `tree_iterative_v2_refined` update further changes the tree-connected strategy. Instead of only adding candidates to the previous soft result, it uses `soft_structure_refined` as a seed source, prunes weak soft-seed candidates with structural and local-image evidence, and then applies iterative recovery again. Candidate branches are evaluated by main-tree connection, endpoint support, branch length, direction consistency, vesselness strength, and local dark-line contrast. Central-region candidates are treated more strictly, while terminal-region candidates are allowed to remain slightly more sensitive.
+
 ## Quantitative Summary
 
 | Method | Dice | Sensitivity | Precision | Terminal Sensitivity | FP / GT Area | FN / GT Area | Skeleton F1 r=5 | Terminal Skeleton F1 r=5 |
@@ -61,6 +63,7 @@ The latest tree-connected iterative refinement follows the professor's suggested
 | hierarchical_terminal_refined | 0.545 | 0.881 | 0.400 | 0.670 | 1.433 | 0.119 | 0.721 | 0.897 |
 | soft_graph_score_refined | 0.541 | 0.888 | 0.394 | 0.675 | 1.483 | 0.112 | 0.722 | 0.898 |
 | tree_iterative_refined | 0.542 | 0.887 | 0.396 | 0.674 | 1.471 | 0.113 | 0.721 | 0.897 |
+| tree_iterative_v2_refined | 0.543 | 0.884 | 0.398 | 0.672 | 1.453 | 0.116 | 0.721 | 0.897 |
 
 ## Interpretation
 
@@ -77,6 +80,8 @@ The integrated `soft_graph_score_refined` result improves terminal-vessel recove
 However, the current score still admits extra false positives. FP / GT area increases from 1.449 to 1.483, and precision decreases from 0.399 to 0.394. This means the method moves in the intended small-vessel recovery direction, but the FP control is not yet sufficient.
 
 The tree-connected iterative refinement reduces part of this false-positive increase while keeping the terminal-vessel gain. Compared with `soft_graph_score_refined`, FP / GT area decreases from 1.483 to 1.471 and precision increases from 0.394 to 0.396. Terminal sensitivity remains higher than the original soft refinement, increasing from 0.673 to 0.674. This suggests that enforcing main-tree connection and using local dark-line contrast helps make the recovery more controlled, although it still does not fully outperform `soft_structure_refined` in overall Dice or precision.
+
+The updated `tree_iterative_v2_refined` result further improves FP control compared with the previous tree iterative version. FP / GT area decreases from 1.471 to 1.453, and precision increases from 0.396 to 0.398. Terminal sensitivity decreases slightly from 0.674 to 0.672, but remains close to the previous soft-structure result. This indicates that pruning weak soft-seed branches before iterative recovery is useful for controlling background noise, although the overall performance is still close to, rather than clearly better than, `soft_structure_refined`.
 
 ## Next Step
 

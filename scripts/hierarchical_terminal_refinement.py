@@ -92,6 +92,36 @@ class TreeIterativeParams:
 
 
 @dataclass(frozen=True)
+class TreeIterativeV2Params:
+    layers: int = 3
+    endpoint_radius_start: int = 18
+    endpoint_radius_step: int = 10
+    bridge_radius: int = 4
+    min_area: int = 10
+    central_min_area: int = 28
+    min_branch_length: int = 6
+    short_branch_length: int = 12
+    strong_branch_length: int = 18
+    min_mean_vesselness: float = 0.045
+    min_max_vesselness: float = 0.18
+    central_min_max_vesselness: float = 0.23
+    min_dark_contrast: float = 0.014
+    central_min_dark_contrast: float = 0.022
+    min_direction_cosine: float = -0.25
+    short_branch_min_direction_cosine: float = 0.0
+    terminal_score_threshold: float = 2.65
+    nonterminal_score_threshold: float = 3.12
+    central_score_penalty: float = 0.30
+    recovery_radius: int = 1
+    soft_anchor_radius: int = 8
+    soft_endpoint_radius: int = 38
+    soft_prune_min_area: int = 22
+    soft_prune_min_branch_length: int = 6
+    soft_prune_min_max_vesselness: float = 0.23
+    soft_prune_min_dark_contrast: float = 0.016
+
+
+@dataclass(frozen=True)
 class BranchFeature:
     length: int
     start_y: int
@@ -834,6 +864,181 @@ def tree_iterative_refinement(
     return remove_small_objects(refined.astype(bool), min_size=12), counts
 
 
+def tree_iterative_v2_refinement(
+    raw: np.ndarray,
+    baseline: np.ndarray,
+    stable_tree: np.ndarray,
+    vesselness: np.ndarray,
+    image: np.ndarray,
+    params: TreeIterativeV2Params,
+) -> tuple[np.ndarray, dict[str, int]]:
+    baseline_tree = remove_small_objects(baseline.astype(bool), min_size=24)
+    stable_tree = remove_small_objects(stable_tree.astype(bool), min_size=24)
+    baseline_skel, baseline_endpoints = skeleton_endpoints(baseline_tree)
+    baseline_anchor_zone = binary_dilation(baseline_tree, iterations=params.soft_anchor_radius)
+    baseline_endpoint_zone = binary_dilation(baseline_endpoints, structure=disk(params.soft_endpoint_radius))
+    refined = baseline_tree.copy()
+    candidate_pool = (raw & ~refined) & (vesselness >= params.min_mean_vesselness)
+    h, w = refined.shape
+    yy, xx = np.indices(refined.shape)
+    radial = np.sqrt((yy - h / 2.0) ** 2 + (xx - w / 2.0) ** 2) / (min(h, w) / 2.0)
+    central_region = radial < 0.55
+    counts = {
+        "iterative_v2_layers": params.layers,
+        "tree_connected_components": 0,
+        "kept_terminal_components": 0,
+        "kept_nonterminal_components": 0,
+        "removed_far_components": 0,
+        "removed_weak_components": 0,
+        "removed_short_components": 0,
+        "removed_direction_components": 0,
+        "removed_low_contrast_components": 0,
+        "removed_central_noise_components": 0,
+        "soft_seed_kept_components": 0,
+        "soft_seed_pruned_components": 0,
+    }
+
+    soft_seed = stable_tree & ~baseline_tree
+    labeled_seed, n_seed_components = label(soft_seed)
+    seed_objects = find_objects(labeled_seed)
+    for component_id in range(1, n_seed_components + 1):
+        bbox = seed_objects[component_id - 1]
+        if bbox is None:
+            continue
+        component = labeled_seed[bbox] == component_id
+        area = int(component.sum())
+        if area == 0:
+            continue
+        component_skel = skeletonize(component)
+        branch_len = int(component_skel.sum())
+        touches_anchor = bool((component & baseline_anchor_zone[bbox]).any())
+        touches_endpoint = bool((component & baseline_endpoint_zone[bbox]).any())
+        comp_vals = vesselness[bbox][component]
+        max_v = float(comp_vals.max()) if comp_vals.size else 0.0
+        dark_contrast, _ = local_dark_line_features(image[bbox], component)
+        has_shape_support = area >= params.soft_prune_min_area and branch_len >= params.soft_prune_min_branch_length
+        has_image_support = max_v >= params.soft_prune_min_max_vesselness or dark_contrast >= params.soft_prune_min_dark_contrast
+        if (touches_anchor or touches_endpoint) and has_shape_support and has_image_support:
+            refined[bbox] |= component
+            counts["soft_seed_kept_components"] += 1
+        else:
+            counts["soft_seed_pruned_components"] += 1
+
+    candidate_pool = (raw & ~refined) & (vesselness >= params.min_mean_vesselness)
+
+    for layer_idx in range(params.layers):
+        current_skel, current_endpoints = skeleton_endpoints(refined)
+        endpoint_radius = params.endpoint_radius_start + layer_idx * params.endpoint_radius_step
+        endpoint_zone = binary_dilation(current_endpoints, structure=disk(endpoint_radius))
+        tree_zone = binary_dilation(refined, iterations=params.bridge_radius + layer_idx)
+        search_zone = endpoint_zone | tree_zone
+        layer_candidates = candidate_pool & search_zone
+        labeled, n_components = label(layer_candidates)
+        objects = find_objects(labeled)
+        if n_components == 0:
+            continue
+
+        endpoint_coords, endpoint_vectors = endpoint_direction_map(current_skel, current_endpoints)
+        layer_kept = np.zeros_like(refined, dtype=bool)
+
+        for component_id in range(1, n_components + 1):
+            bbox = objects[component_id - 1]
+            if bbox is None:
+                continue
+            component = labeled[bbox] == component_id
+            area = int(component.sum())
+            if area < params.min_area:
+                counts["removed_short_components"] += 1
+                continue
+
+            bridge_bbox = expand_bbox(bbox, refined.shape, params.bridge_radius)
+            local_component = np.zeros(
+                (bridge_bbox[0].stop - bridge_bbox[0].start, bridge_bbox[1].stop - bridge_bbox[1].start),
+                dtype=bool,
+            )
+            y_offset = bbox[0].start - bridge_bbox[0].start
+            x_offset = bbox[1].start - bridge_bbox[1].start
+            local_component[y_offset : y_offset + component.shape[0], x_offset : x_offset + component.shape[1]] = component
+            connected_to_tree = bool(
+                (binary_dilation(local_component, iterations=params.bridge_radius) & refined[bridge_bbox]).any()
+            )
+            if not connected_to_tree:
+                counts["removed_far_components"] += 1
+                continue
+
+            component_skel = skeletonize(component)
+            branch_stats = branch_graph_stats(component, bbox, endpoint_coords, endpoint_vectors, component_skel)
+            branch_len = branch_stats["longest_branch_length"]
+            direction_cos = branch_stats["branch_direction_cosine"]
+            touches_endpoint = bool((component & endpoint_zone[bbox]).any())
+            is_central = bool((component & central_region[bbox]).mean() > 0.5)
+            comp_vals = vesselness[bbox][component]
+            mean_v = float(comp_vals.mean()) if comp_vals.size else 0.0
+            max_v = float(comp_vals.max()) if comp_vals.size else 0.0
+            dark_contrast, _ = local_dark_line_features(image[bbox], component)
+            counts["tree_connected_components"] += 1
+
+            min_max_v = params.central_min_max_vesselness if is_central else params.min_max_vesselness
+            min_contrast = params.central_min_dark_contrast if is_central else params.min_dark_contrast
+            min_area = params.central_min_area if is_central else params.min_area
+
+            if area < min_area and branch_len < params.strong_branch_length:
+                counts["removed_short_components"] += 1
+                continue
+            if max_v < min_max_v and dark_contrast < min_contrast:
+                counts["removed_low_contrast_components"] += 1
+                continue
+            if direction_cos < params.min_direction_cosine and branch_len < params.strong_branch_length:
+                counts["removed_direction_components"] += 1
+                continue
+
+            connection_score = 0.90
+            terminal_score = 0.70 if touches_endpoint else 0.0
+            vessel_score = 0.55 * min(max_v / 0.24, 1.0) + 0.25 * min(mean_v / 0.12, 1.0)
+            contrast_score = 0.60 * min(max(dark_contrast, 0.0) / 0.05, 1.0)
+            branch_score = 0.45 * min(branch_len / params.strong_branch_length, 1.0)
+            area_score = 0.25 * min(area / 80.0, 1.0)
+            direction_score = 0.45 * max(0.0, (direction_cos + 1.0) / 2.0)
+            short_branch_penalty = 0.30 if branch_len < params.short_branch_length else 0.0
+            central_penalty = params.central_score_penalty if is_central else 0.0
+            layer_penalty = 0.08 * layer_idx
+            score = (
+                connection_score
+                + terminal_score
+                + vessel_score
+                + contrast_score
+                + branch_score
+                + area_score
+                + direction_score
+                - short_branch_penalty
+                - central_penalty
+                - layer_penalty
+            )
+            threshold = params.terminal_score_threshold if touches_endpoint else params.nonterminal_score_threshold
+
+            if branch_len < params.short_branch_length and direction_cos < params.short_branch_min_direction_cosine:
+                score -= 0.20
+
+            if score >= threshold:
+                recovered = component & binary_dilation(component_skel, iterations=params.recovery_radius)
+                layer_kept[bbox] |= recovered
+                if touches_endpoint:
+                    counts["kept_terminal_components"] += 1
+                else:
+                    counts["kept_nonterminal_components"] += 1
+            elif is_central:
+                counts["removed_central_noise_components"] += 1
+            else:
+                counts["removed_weak_components"] += 1
+
+        if not layer_kept.any():
+            continue
+        refined |= layer_kept
+        candidate_pool &= ~binary_dilation(layer_kept, iterations=1)
+
+    return remove_small_objects(refined.astype(bool), min_size=12), counts
+
+
 def evaluate_row(
     image: str,
     method: str,
@@ -895,6 +1100,7 @@ def make_summary_figure(summary: pd.DataFrame, out: Path) -> None:
         "branch_graph_refined",
         "soft_graph_score_refined",
         "tree_iterative_refined",
+        "tree_iterative_v2_refined",
     ]
     metrics = [
         ("dice", "Dice"),
@@ -957,27 +1163,36 @@ def overlay_panel(image: np.ndarray, mask: np.ndarray, gt: np.ndarray, size: int
 
 def make_example_figure(cases: list[dict[str, object]], per_image: pd.DataFrame, out: Path) -> None:
     chosen = (
-        per_image[per_image["method"] == "tree_iterative_refined"]
+        per_image[per_image["method"] == "tree_iterative_v2_refined"]
         .assign(balance=lambda d: d["terminal_sensitivity"] + 0.3 * d["precision"] - 0.1 * d["fp_over_gt_area"])
         .sort_values("balance", ascending=False)
         .head(3)["image"]
         .tolist()
     )
     case_map = {case["name"]: case for case in cases}
-    labels = ["Original", "GT", "Connected raw", "Tree iterative", "Recovered candidates", "FN after refine"]
+    labels = ["Original", "GT", "Connected raw", "Tree iterative v2", "Recovered candidates", "FN after refine"]
     size = 245
     rows = []
-    params = TreeIterativeParams()
+    soft_params = SoftParams()
+    params = TreeIterativeV2Params()
     for name in chosen:
         case = case_map[name]
-        refined, _ = tree_iterative_refinement(
+        stable_tree, _ = soft_refinement(
             case["connected_raw"],
             case["baseline"],
+            case["vesselness"],
+            case["baseline_endpoints"],
+            soft_params,
+        )
+        refined, _ = tree_iterative_v2_refinement(
+            case["connected_raw"],
+            case["baseline"],
+            stable_tree,
             case["vesselness"],
             case["image"],
             params,
         )
-        recovered = refined & ~case["baseline"]
+        recovered = refined & ~stable_tree
         fn = case["gt"] & ~refined
         panels = [
             Image.fromarray(case["image"]).resize((size, size)),
@@ -996,7 +1211,7 @@ def make_example_figure(cases: list[dict[str, object]], per_image: pd.DataFrame,
         rows.append(row)
     canvas = Image.new("RGB", (size * len(labels), 42 + sum(r.height for r in rows) + 12 * (len(rows) - 1)), "white")
     draw = ImageDraw.Draw(canvas)
-    draw.text((0, 10), "Tree-connected iterative terminal refinement examples", fill=(20, 20, 20))
+    draw.text((0, 10), "Tree-aware iterative v2 terminal refinement examples", fill=(20, 20, 20))
     y = 42
     for row in rows:
         canvas.paste(row, (0, y))
@@ -1022,6 +1237,7 @@ def main() -> None:
     branch_graph_params = BranchGraphParams()
     soft_graph_score_params = SoftGraphScoreParams()
     tree_iterative_params = TreeIterativeParams()
+    tree_iterative_v2_params = TreeIterativeV2Params()
 
     rows = []
     for idx, case in enumerate(cases, start=1):
@@ -1113,6 +1329,24 @@ def main() -> None:
                 case["gt"],
                 case["term_gt"],
                 tree_iterative_counts,
+            )
+        )
+        tree_iterative_v2, tree_iterative_v2_counts = tree_iterative_v2_refinement(
+            case["connected_raw"],
+            case["baseline"],
+            soft,
+            case["vesselness"],
+            case["image"],
+            tree_iterative_v2_params,
+        )
+        rows.append(
+            evaluate_row(
+                case["name"],
+                "tree_iterative_v2_refined",
+                tree_iterative_v2,
+                case["gt"],
+                case["term_gt"],
+                tree_iterative_v2_counts,
             )
         )
 
